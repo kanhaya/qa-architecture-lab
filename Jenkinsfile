@@ -44,13 +44,9 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "=== Building Docker Image ==="
-
                     docker build \
                         -t k3d-qa-registry:5000/loan-service:${BUILD_NUMBER} \
                         .
-
-                    echo "=== Pushing Docker Image ==="
 
                     docker push \
                         k3d-qa-registry:5000/loan-service:${BUILD_NUMBER}
