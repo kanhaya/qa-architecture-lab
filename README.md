@@ -2,6 +2,9 @@
 
 A production-style **Loan Management microservice** built for hands-on learning by Senior SDETs and QA Architects. The project demonstrates the full lifecycle of a cloud-native service: local development, containerization, Kubernetes deployment, API automation, and deployment validation.
 
+> **Full walkthrough:** See [docs/BUILD-GUIDE.md](docs/BUILD-GUIDE.md) for the complete step-by-step guide.  
+> **PDF playbook:** [docs/QA-Architecture-Lab-Playbook.pdf](docs/QA-Architecture-Lab-Playbook.pdf) — regenerate with `./scripts/generate-playbook-pdf.sh`
+
 ## Architecture
 
 ```
@@ -341,7 +344,7 @@ kubectl -n qa-lab get events --sort-by='.lastTimestamp'
 | 5 — API Automation | Done | REST Assured test framework |
 | 6 — Deployment Validation | Done | Post-deploy validation scripts |
 | 7 — Resilience Testing | Planned | Pod failure, scaling, rollback |
-| 8 — CI/CD | Planned | External Jenkins or GitHub Actions |
+| 8 — CI/CD | Done | Jenkins pipeline (build → deploy → smoke tests) |
 | 9 — Helm | Planned | Helm chart templating |
 | 10 — Argo CD | Planned | GitOps deployment |
 | 11 — Observability | Planned | Prometheus, Grafana, OpenTelemetry |
