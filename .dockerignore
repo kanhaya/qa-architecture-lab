@@ -1,0 +1,14 @@
+.git
+.gitignore
+.idea
+.vscode
+*.iml
+target/
+tests/src/
+k8s/
+scripts/
+README.md
+.cursor/
+.DS_Store
+*.log
+.env

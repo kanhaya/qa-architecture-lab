@@ -1,0 +1,6 @@
+app:
+  env: kubernetes
+
+logging:
+  level:
+    com.qa.loanservice: INFO

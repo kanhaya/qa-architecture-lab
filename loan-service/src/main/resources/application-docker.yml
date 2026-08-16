@@ -1,0 +1,6 @@
+app:
+  env: docker
+
+logging:
+  level:
+    com.qa.loanservice: INFO
