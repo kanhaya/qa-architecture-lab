@@ -164,15 +164,48 @@ Or start port-forward in the background:
 
 ## External CI/CD (Jenkins)
 
-Jenkins typically runs on **port 8080**, so the Loan Service defaults to **8081** locally to avoid conflicts.
+Jenkins runs in a **Docker container** with access to the Docker socket, Maven, and `kubectl`. The pipeline in `Jenkinsfile` implements this flow:
 
-Use the included `Jenkinsfile` pipeline, or run the deploy script manually:
-
-```bash
-./scripts/deploy-and-test.sh
+```
+GitHub → Jenkins (Docker) → mvn package → docker build
+    → k3d Registry (k3d-qa-registry:5000) → k3d Cluster (qa-lab)
+    → kubectl set image → 3 replicas → REST Assured tests → JUnit report
 ```
 
-The pipeline runs unit tests, deploys to k3d/Kubernetes, and executes smoke tests against `http://localhost:30080`.
+### One-time setup
+
+1. Create the k3d cluster and registry:
+
+```bash
+./scripts/setup-k3d-cluster.sh
+```
+
+2. Connect Jenkins to the k3d Docker network:
+
+```bash
+JENKINS_CONTAINER=jenkins ./scripts/setup-jenkins-k3d-network.sh
+```
+
+3. In Jenkins, add a **Secret file** credential with ID `k3d-kubeconfig` pointing to your kubeconfig.
+
+### Registry naming
+
+| Context | Registry URL | Why |
+|---------|--------------|-----|
+| **Image tag / cluster pull** | `k3d-qa-registry:5000` | In-cluster DNS name used by Kubernetes |
+| **docker push from Jenkins** | `localhost:5001` | Host-mapped port to the **same** k3d registry |
+
+The pipeline tags images as `k3d-qa-registry:5000/loan-service:<build>` (matching the diagram) and pushes via `localhost:5001` because the Docker daemon reaches the registry through the host port mapping.
+
+### Service URL for tests
+
+From Jenkins on the `k3d-qa-cluster` network, API tests use:
+
+```
+http://k3d-qa-cluster-server-0:30080
+```
+
+Jenkins on port **8080** does not conflict with the Loan Service — tests hit the Kubernetes NodePort, not Jenkins.
 
 ## Run API Tests
 

@@ -2,9 +2,19 @@ pipeline {
     agent any
 
     environment {
-        BASE_URL = 'http://localhost:30080'
+        // In-cluster registry name (same registry the k3d cluster pulls from)
+        REGISTRY = 'k3d-qa-registry:5000'
+        IMAGE_NAME = 'loan-service'
+        CLUSTER_IMAGE = "${REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER}"
+
+        // Host-mapped registry port (Docker daemon pushes via host port mapping)
+        HOST_REGISTRY = 'localhost:5001'
+
+        // k3d cluster: qa-cluster (Jenkins is on network k3d-qa-cluster)
+        K3D_CLUSTER = 'qa-cluster'
+        K3D_NETWORK = 'k3d-qa-cluster'
+        BASE_URL = 'http://k3d-qa-cluster-server-0:30080'
         NAMESPACE = 'qa-lab'
-        CLUSTER_IMAGE = "k3d-qa-registry:5000/loan-service:${BUILD_NUMBER}"
     }
 
     stages {
@@ -26,6 +36,10 @@ pipeline {
 
                     echo "=== Maven ==="
                     mvn --version
+
+                    echo "=== k3d Registry ==="
+                    curl -sf http://${REGISTRY}/v2/_catalog || \
+                        echo "WARNING: registry not reachable at ${REGISTRY}"
                 '''
             }
         }
@@ -44,12 +58,18 @@ pipeline {
                 sh '''
                     set -e
 
+                    # Tag with in-cluster registry name (k3d-qa-registry:5000)
                     docker build \
-                        -t k3d-qa-registry:5000/loan-service:${BUILD_NUMBER} \
+                        -t ${REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER} \
                         .
 
+                    # Push via host-mapped port (same physical k3d registry)
+                    docker tag \
+                        ${REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER} \
+                        ${HOST_REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER}
+
                     docker push \
-                        k3d-qa-registry:5000/loan-service:${BUILD_NUMBER}
+                        ${HOST_REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER}
                 '''
             }
         }
@@ -73,11 +93,11 @@ pipeline {
 
                         echo "=== Updating Deployment Image ==="
                         kubectl set image deployment/loan-service \
-                            loan-service=$CLUSTER_IMAGE \
-                            -n $NAMESPACE
+                            loan-service=${CLUSTER_IMAGE} \
+                            -n ${NAMESPACE}
 
                         echo "=== Kubernetes Resources ==="
-                        kubectl get all -n $NAMESPACE
+                        kubectl get all -n ${NAMESPACE}
                     '''
                 }
             }
@@ -94,14 +114,14 @@ pipeline {
                     sh '''
                         echo "=== Waiting for Deployment ==="
                         kubectl rollout status deployment/loan-service \
-                            -n $NAMESPACE \
+                            -n ${NAMESPACE} \
                             --timeout=120s
 
                         echo "=== Pods ==="
-                        kubectl get pods -n $NAMESPACE -o wide
+                        kubectl get pods -n ${NAMESPACE} -o wide
 
                         echo "=== Services ==="
-                        kubectl get services -n $NAMESPACE
+                        kubectl get services -n ${NAMESPACE}
                     '''
                 }
             }
@@ -110,7 +130,7 @@ pipeline {
         stage('Run REST Assured Tests') {
             steps {
                 sh """
-                    echo "=== Running REST Assured Tests ==="
+                    echo "=== Running REST Assured Tests against ${BASE_URL} ==="
                     mvn test -pl tests -Dgroups=smoke -DBASE_URL=${BASE_URL}
                 """
             }
@@ -121,6 +141,9 @@ pipeline {
         always {
             echo '=== Pipeline Finished ==='
             junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
+        }
+        failure {
+            echo 'Pipeline failed. Check console output above for the first error.'
         }
     }
 }
