@@ -382,24 +382,325 @@ mvn test -pl tests -Dgroups=smoke
 
 ---
 
-## 9. Phase 6 — Deployment Scripts
+## 9. Phase 6 — Scripts Reference (Detailed)
 
-| Script | Purpose |
-|--------|---------|
-| `setup-k3d-cluster.sh` | Create k3d cluster, registry, apply manifests |
-| `deploy-and-test.sh` | Full flow: build → push → deploy → validate → smoke tests |
-| `validate-deployment.sh` | Poll health endpoint, check pod count |
-| `start-lab.sh` | Start k3d + Kubernetes Dashboard |
-| `setup-k8s-dashboard.sh` | Install dashboard, print access token |
-| `open-dashboard.sh` | Port-forward dashboard to https://localhost:8443 |
-| `setup-jenkins-k3d-network.sh` | Connect Jenkins container to k3d Docker network |
-| `configure-jenkins-kubeconfig.sh` | Generate kubeconfig inside Jenkins (used by pipeline) |
-| `export-jenkins-kubeconfig.sh` | Export kubeconfig for manual debugging |
+The `scripts/` directory contains automation for cluster setup, deployment, validation, dashboard access, Jenkins integration, and documentation. Each script is **idempotent** where possible (safe to re-run).
 
-### One-command deploy and test
+### Scripts overview map
+
+```
+scripts/
+├── setup-k3d-cluster.sh          ← Foundation: create cluster + registry
+├── deploy-and-test.sh            ← Main workflow: build → deploy → test
+├── validate-deployment.sh          ← Health/replica checks (used by deploy-and-test)
+├── start-lab.sh                    ← Full lab: cluster + dashboard + status
+├── setup-k8s-dashboard.sh          ← Install K8s Dashboard (foreground)
+├── open-dashboard.sh               ← Open dashboard (background port-forward)
+├── setup-jenkins-k3d-network.sh    ← Connect Jenkins to k3d Docker network
+├── configure-jenkins-kubeconfig.sh ← Runtime kubeconfig (used by Jenkinsfile)
+├── export-jenkins-kubeconfig.sh    ← Export kubeconfig for manual debugging
+└── generate-playbook-pdf.sh        ← Regenerate this playbook as PDF
+```
+
+---
+
+### 9.1 `setup-k3d-cluster.sh` — Create k3d cluster and registry
+
+**Purpose:** One-time (or repeatable) foundation for the entire lab. Creates a local Kubernetes cluster with an embedded Docker registry and applies all `k8s/` manifests.
+
+**Why needed:** Without this, there is no cluster to deploy to and no registry for Kubernetes to pull images from. This is the **first script** you run when setting up the lab.
+
+**What it does step by step:**
+
+1. Checks `k3d` is installed
+2. If cluster exists → skips creation, ensures NodePort `30080` is mapped
+3. If cluster does not exist → creates cluster with:
+   - Embedded registry at `localhost:5001` (in-cluster: `k3d-qa-registry:5000`)
+   - NodePort mapping `30080:30080` for the Loan Service
+   - 2 agent nodes (worker capacity)
+4. Runs `kubectl apply -f k8s/` (namespace, configmap, deployment, service)
+
+**When to use:**
+
+```bash
+./scripts/setup-k3d-cluster.sh
+# Custom cluster name:
+K3D_CLUSTER=qa-cluster ./scripts/setup-k3d-cluster.sh
+```
+
+**Environment variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `K3D_CLUSTER` | `qa-lab` | k3d cluster name |
+| `REGISTRY_NAME` | `qa-registry` | Registry name (becomes `k3d-qa-registry`) |
+| `REGISTRY_HOST_PORT` | `5001` | Host port for `docker push` |
+| `NODE_PORT` | `30080` | NodePort exposed on host |
+| `AGENTS` | `2` | Number of k3d agent nodes |
+
+**Output when successful:**
+
+```
+Registry (host push):  localhost:5001
+Registry (in-cluster): k3d-qa-registry:5000
+Service URL:           http://localhost:30080
+Namespace:             qa-lab
+```
+
+---
+
+### 9.2 `deploy-and-test.sh` — Full build, deploy, and test pipeline
+
+**Purpose:** The **main orchestration script** — replicates locally what Jenkins does in CI. Builds the app, pushes the Docker image, deploys to Kubernetes, validates, and runs smoke tests.
+
+**Why needed:** Provides a single command to verify the entire stack works without Jenkins. Useful for local development and debugging before pushing to CI.
+
+**What it does step by step:**
+
+| Step | Action | Why |
+|------|--------|-----|
+| 1 | `mvnw clean package -pl loan-service -DskipTests` | Compile JAR without API tests (no server needed) |
+| 2 | `docker build` | Package app into container image |
+| 3 | `docker push localhost:5001/...` | Push to k3d registry so Kubernetes can pull |
+| 4 | `kubectl apply -f k8s/` + `kubectl set image` | Deploy/update with correct image tag |
+| 5 | `kubectl rollout status` | Wait until all pods are ready |
+| 6 | `validate-deployment.sh` | Verify replicas, pods, health endpoint |
+| 7 | `mvnw test -pl tests -Dgroups=smoke` | Run REST Assured smoke tests |
+
+**When to use:**
 
 ```bash
 ./scripts/deploy-and-test.sh
+
+# Custom image tag:
+IMAGE_TAG=2.0 ./scripts/deploy-and-test.sh
+```
+
+**Environment variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NAMESPACE` | `qa-lab` | Kubernetes namespace |
+| `DEPLOYMENT` | `loan-service` | Deployment name |
+| `BASE_URL` | `http://localhost:30080` | API test target URL |
+| `TIMEOUT` | `180` | Rollout and health timeout (seconds) |
+| `K3D_CLUSTER` | `qa-lab` | k3d cluster name |
+| `REGISTRY` | `localhost:5001` | Host registry for push |
+| `IMAGE_NAME` | `loan-service` | Docker image name |
+| `IMAGE_TAG` | `1.0` | Docker image tag |
+
+---
+
+### 9.3 `validate-deployment.sh` — Post-deploy health and replica checks
+
+**Purpose:** Gatekeeper script that confirms the deployment is **actually healthy** before running API tests. Called by `deploy-and-test.sh` and usable standalone.
+
+**Why needed:** `kubectl rollout status` only confirms the rollout completed — it does not verify the health endpoint responds or all replicas are truly ready. This script adds that safety layer.
+
+**What it checks:**
+
+1. Deployment exists in namespace
+2. `readyReplicas == desiredReplicas` (expects 3)
+3. All pods are in `Running` state
+4. All pods pass `Ready` condition
+5. Service exists
+6. Polls `GET /actuator/health` until `"status":"UP"` or timeout
+
+**When to use:**
+
+```bash
+export BASE_URL=http://localhost:30080
+./scripts/validate-deployment.sh
+```
+
+**Fails fast with clear errors** — prints pod status on failure for quick diagnosis.
+
+---
+
+### 9.4 `start-lab.sh` — Start the complete lab environment
+
+**Purpose:** Brings up **everything** needed for hands-on learning: k3d cluster, Kubernetes Dashboard, port-forwards, and prints all access URLs and tokens.
+
+**Why needed:** Convenience script for workshop/demo scenarios. One command to get cluster + dashboard + status summary.
+
+**What it does:**
+
+1. Runs `setup-k3d-cluster.sh`
+2. Ensures NodePort `30080` is mapped
+3. Installs Kubernetes Dashboard (if not present)
+4. Creates `dashboard-admin` service account with cluster-admin role
+5. Starts dashboard port-forward on `https://localhost:8443` (background)
+6. Prints Loan Service URL, health URL, dashboard URL, and access token
+7. Waits for health and dashboard to become reachable
+
+**When to use:**
+
+```bash
+./scripts/start-lab.sh
+# Then deploy the app:
+./scripts/deploy-and-test.sh
+```
+
+---
+
+### 9.5 `setup-k8s-dashboard.sh` — Install Kubernetes Dashboard
+
+**Purpose:** Installs the official Kubernetes Dashboard and sets up admin access. Runs port-forward in the **foreground** (blocks terminal).
+
+**Why needed:** Visual inspection of pods, services, deployments, and events — essential for learning Kubernetes and debugging `ImagePullBackOff`, probe failures, etc.
+
+**What it does:**
+
+1. Applies dashboard manifests from `kubernetes/dashboard` GitHub (v2.7.0)
+2. Creates `dashboard-admin` ServiceAccount with `cluster-admin` ClusterRoleBinding
+3. Waits for dashboard deployment to be ready
+4. Generates a short-lived access token
+5. Starts `kubectl port-forward` on `https://localhost:8443` (foreground)
+
+**When to use:**
+
+```bash
+./scripts/setup-k8s-dashboard.sh
+# Open https://localhost:8443 and paste the printed token
+# Navigate to namespace: qa-lab
+```
+
+---
+
+### 9.6 `open-dashboard.sh` — Open dashboard (background)
+
+**Purpose:** Lightweight alternative to `setup-k8s-dashboard.sh` — starts port-forward in the **background** and prints the URL + token without blocking the terminal.
+
+**Why needed:** When the dashboard is already installed and you just need to reconnect or get a fresh token.
+
+**When to use:**
+
+```bash
+./scripts/open-dashboard.sh
+# Dashboard at https://localhost:8443
+```
+
+---
+
+### 9.7 `setup-jenkins-k3d-network.sh` — Connect Jenkins to k3d network
+
+**Purpose:** Connects the Jenkins Docker container to the k3d cluster's Docker network so Jenkins can resolve `k3d-qa-registry`, reach the Kubernetes API, and hit the Loan Service NodePort.
+
+**Why needed:** By default Jenkins runs on the `bridge` network and cannot resolve k3d hostnames (`k3d-qa-registry`, `k3d-qa-cluster-server-0`). Without this, registry checks, kubectl, and API tests fail inside Jenkins.
+
+**What it does:**
+
+1. Verifies Jenkins container exists
+2. Verifies k3d network exists (`k3d-qa-cluster` or `k3d-<cluster-name>`)
+3. Runs `docker network connect k3d-qa-cluster jenkins` (idempotent)
+
+**When to use (one-time after starting Jenkins):**
+
+```bash
+JENKINS_CONTAINER=jenkins ./scripts/setup-jenkins-k3d-network.sh
+```
+
+**After running, Jenkins can reach:**
+
+| Target | URL |
+|--------|-----|
+| Registry | `k3d-qa-registry:5000` |
+| Loan Service | `http://k3d-qa-cluster-server-0:30080` |
+| Kubernetes API | `https://k3d-qa-cluster-serverlb:6443` |
+
+---
+
+### 9.8 `configure-jenkins-kubeconfig.sh` — Generate kubeconfig at runtime
+
+**Purpose:** Creates a valid kubeconfig **inside the Jenkins container** for `kubectl` commands. Used by the Jenkinsfile in Deploy and Wait stages.
+
+**Why needed:** The host kubeconfig (`~/.kube/config`) uses `https://0.0.0.0:<port>` which fails inside Jenkins with TLS errors. This script fetches a fresh config from k3d and rewrites the API server to the Docker-network address.
+
+**What it does:**
+
+1. Runs `k3d kubeconfig get qa-cluster` via the k3d Docker image + Docker socket
+2. Rewrites API server to `https://k3d-qa-cluster-serverlb:6443`
+3. Sets `KUBECONFIG` environment variable to a temp file
+4. Must be **sourced** (not executed) so `KUBECONFIG` persists in the shell
+
+**Used in Jenkinsfile as:**
+
+```bash
+#!/usr/bin/env bash
+source scripts/configure-jenkins-kubeconfig.sh
+kubectl get nodes
+```
+
+**Environment variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `K3D_CLUSTER` | `qa-cluster` | Cluster name |
+| `KUBE_SERVER` | `https://k3d-qa-cluster-serverlb:6443` | API server URL |
+| `K3D_IMAGE` | `ghcr.io/k3d-io/k3d:5.8.3` | k3d Docker image |
+
+---
+
+### 9.9 `export-jenkins-kubeconfig.sh` — Export kubeconfig for manual use
+
+**Purpose:** Generates a Jenkins-compatible kubeconfig file on your **Mac** for manual debugging or optional Jenkins credential upload.
+
+**Why needed:** When you want to run `kubectl` from your Mac with the same API server URL Jenkins uses, or upload a pre-built kubeconfig to Jenkins credentials.
+
+**When to use:**
+
+```bash
+./scripts/export-jenkins-kubeconfig.sh jenkins-kubeconfig.yaml
+# Optional: upload to Jenkins → Manage Credentials → Secret file → ID: k3d-kubeconfig
+```
+
+> **Note:** The current Jenkinsfile generates kubeconfig at runtime and does **not** require this credential. This script is for manual debugging only.
+
+---
+
+### 9.10 `generate-playbook-pdf.sh` — Regenerate the PDF playbook
+
+**Purpose:** Converts `docs/BUILD-GUIDE.md` into a styled PDF using `md-to-pdf`.
+
+**When to use:**
+
+```bash
+./scripts/generate-playbook-pdf.sh
+# Output: docs/QA-Architecture-Lab-Playbook.pdf
+```
+
+---
+
+### Scripts vs Jenkins pipeline — who does what?
+
+| Task | Local script | Jenkins pipeline |
+|------|-------------|-----------------|
+| Create cluster | `setup-k3d-cluster.sh` | Manual one-time setup |
+| Build JAR | `deploy-and-test.sh` | `mvn clean package -DskipTests` |
+| Docker build/push | `deploy-and-test.sh` | Build Docker Image stage |
+| kubectl deploy | `deploy-and-test.sh` | Deploy to Kubernetes stage |
+| Wait for rollout | `deploy-and-test.sh` | Wait for Application stage |
+| Validate health | `validate-deployment.sh` | (implicit in wait + tests) |
+| API smoke tests | `deploy-and-test.sh` | Run REST Assured Tests stage |
+| Connect Jenkins network | `setup-jenkins-k3d-network.sh` | Manual one-time setup |
+| Kubeconfig for kubectl | `configure-jenkins-kubeconfig.sh` | Sourced in pipeline stages |
+
+### One-command workflows
+
+```bash
+# First-time lab setup
+./scripts/setup-k3d-cluster.sh
+JENKINS_CONTAINER=jenkins ./scripts/setup-jenkins-k3d-network.sh
+
+# Deploy and test locally (no Jenkins)
+./scripts/deploy-and-test.sh
+
+# Full lab with dashboard
+./scripts/start-lab.sh
+./scripts/deploy-and-test.sh
+
+# Regenerate PDF playbook
+./scripts/generate-playbook-pdf.sh
 ```
 
 ---
