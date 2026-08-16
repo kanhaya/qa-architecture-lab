@@ -4,10 +4,7 @@ pipeline {
     environment {
         BASE_URL = 'http://localhost:30080'
         NAMESPACE = 'qa-lab'
-        REGISTRY = 'localhost:5001'
-        IMAGE_NAME = 'loan-service'
-        IMAGE_TAG = '1.0'
-        CLUSTER_IMAGE = 'k3d-qa-registry:5000/loan-service:1.0'
+        CLUSTER_IMAGE = "k3d-qa-registry:5000/loan-service:${BUILD_NUMBER}"
     }
 
     stages {
@@ -44,11 +41,20 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh """
+                sh '''
+                    set -e
+
                     echo "=== Building Docker Image ==="
-                    docker build -t ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} .
-                    docker push ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-                """
+
+                    docker build \
+                        -t k3d-qa-registry:5000/loan-service:${BUILD_NUMBER} \
+                        .
+
+                    echo "=== Pushing Docker Image ==="
+
+                    docker push \
+                        k3d-qa-registry:5000/loan-service:${BUILD_NUMBER}
+                '''
             }
         }
 
