@@ -1,7 +1,22 @@
 pipeline {
     agent any
 
+    environment {
+        BASE_URL = 'http://localhost:30080'
+        NAMESPACE = 'qa-lab'
+        REGISTRY = 'localhost:5001'
+        IMAGE_NAME = 'loan-service'
+        IMAGE_TAG = '1.0'
+        CLUSTER_IMAGE = 'k3d-qa-registry:5000/loan-service:1.0'
+    }
+
     stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
 
         stage('Verify Environment') {
             steps {
@@ -29,13 +44,11 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh '''
+                sh """
                     echo "=== Building Docker Image ==="
-
-                    docker build \
-                        -t qa-loan-service:${BUILD_NUMBER} \
-                        .
-                '''
+                    docker build -t ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} .
+                    docker push ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+                """
             }
         }
 
@@ -48,17 +61,21 @@ pipeline {
                     )
                 ]) {
                     sh '''
+                        set -e
+
                         echo "=== Kubernetes Cluster ==="
                         kubectl get nodes
 
-                        echo "=== Deploying Application ==="
-
+                        echo "=== Applying Manifests ==="
                         kubectl apply -f k8s/
 
+                        echo "=== Updating Deployment Image ==="
+                        kubectl set image deployment/loan-service \
+                            loan-service=$CLUSTER_IMAGE \
+                            -n $NAMESPACE
+
                         echo "=== Kubernetes Resources ==="
-                        kubectl get deployments
-                        kubectl get pods
-                        kubectl get services
+                        kubectl get all -n $NAMESPACE
                     '''
                 }
             }
@@ -74,15 +91,15 @@ pipeline {
                 ]) {
                     sh '''
                         echo "=== Waiting for Deployment ==="
-
                         kubectl rollout status deployment/loan-service \
+                            -n $NAMESPACE \
                             --timeout=120s
 
                         echo "=== Pods ==="
-                        kubectl get pods -o wide
+                        kubectl get pods -n $NAMESPACE -o wide
 
                         echo "=== Services ==="
-                        kubectl get services
+                        kubectl get services -n $NAMESPACE
                     '''
                 }
             }
@@ -90,21 +107,18 @@ pipeline {
 
         stage('Run REST Assured Tests') {
             steps {
-                sh '''
+                sh """
                     echo "=== Running REST Assured Tests ==="
-
-                    mvn test
-                '''
+                    mvn test -pl tests -Dgroups=smoke -DBASE_URL=${BASE_URL}
+                """
             }
         }
     }
 
     post {
         always {
-            echo "=== Pipeline Finished ==="
-
-            junit allowEmptyResults: true,
-                  testResults: '**/target/surefire-reports/*.xml'
+            echo '=== Pipeline Finished ==='
+            junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
         }
     }
 }
