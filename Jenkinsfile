@@ -30,7 +30,9 @@ pipeline {
 
         stage('Verify Environment') {
             steps {
-                sh '''
+                sh '''#!/usr/bin/env bash
+set -e
+
                     echo "=== Docker ==="
                     docker --version
 
@@ -82,8 +84,8 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                sh '''
-                    set -e
+                sh '''#!/usr/bin/env bash
+set -e
                     source scripts/configure-jenkins-kubeconfig.sh
 
                     echo "=== Kubernetes Cluster ==="
@@ -105,7 +107,8 @@ pipeline {
 
         stage('Wait for Application') {
             steps {
-                sh '''
+                sh '''#!/usr/bin/env bash
+set -e
                     source scripts/configure-jenkins-kubeconfig.sh
 
                     echo "=== Waiting for Deployment ==="
