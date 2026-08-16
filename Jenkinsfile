@@ -13,6 +13,8 @@ pipeline {
         // k3d cluster: qa-cluster (Jenkins is on network k3d-qa-cluster)
         K3D_CLUSTER = 'qa-cluster'
         K3D_NETWORK = 'k3d-qa-cluster'
+        KUBE_CONTEXT = 'k3d-qa-cluster'
+        KUBE_SERVER = 'https://k3d-qa-cluster-serverlb:6443'
         BASE_URL = 'http://k3d-qa-cluster-server-0:30080'
         NAMESPACE = 'qa-lab'
     }
@@ -85,6 +87,18 @@ pipeline {
                     sh '''
                         set -e
 
+                        configure_kubeconfig() {
+                            local kubeconfig
+                            kubeconfig=$(mktemp)
+                            cp "${KUBECONFIG}" "${kubeconfig}"
+                            export KUBECONFIG="${kubeconfig}"
+                            kubectl config set-cluster "${KUBE_CONTEXT}" \
+                                --server="${KUBE_SERVER}"
+                            kubectl config use-context "${KUBE_CONTEXT}"
+                        }
+
+                        configure_kubeconfig
+
                         echo "=== Kubernetes Cluster ==="
                         kubectl get nodes
 
@@ -112,6 +126,18 @@ pipeline {
                     )
                 ]) {
                     sh '''
+                        configure_kubeconfig() {
+                            local kubeconfig
+                            kubeconfig=$(mktemp)
+                            cp "${KUBECONFIG}" "${kubeconfig}"
+                            export KUBECONFIG="${kubeconfig}"
+                            kubectl config set-cluster "${KUBE_CONTEXT}" \
+                                --server="${KUBE_SERVER}"
+                            kubectl config use-context "${KUBE_CONTEXT}"
+                        }
+
+                        configure_kubeconfig
+
                         echo "=== Waiting for Deployment ==="
                         kubectl rollout status deployment/loan-service \
                             -n ${NAMESPACE} \
