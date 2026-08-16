@@ -15,6 +15,7 @@ pipeline {
         K3D_NETWORK = 'k3d-qa-cluster'
         KUBE_CONTEXT = 'k3d-qa-cluster'
         KUBE_SERVER = 'https://k3d-qa-cluster-serverlb:6443'
+        K3D_IMAGE = 'ghcr.io/k3d-io/k3d:5.8.3'
         BASE_URL = 'http://k3d-qa-cluster-server-0:30080'
         NAMESPACE = 'qa-lab'
     }
@@ -42,6 +43,11 @@ pipeline {
                     echo "=== k3d Registry ==="
                     curl -sf http://${REGISTRY}/v2/_catalog || \
                         echo "WARNING: registry not reachable at ${REGISTRY}"
+
+                    echo "=== k3d API ==="
+                    chmod +x scripts/configure-jenkins-kubeconfig.sh
+                    source scripts/configure-jenkins-kubeconfig.sh
+                    kubectl get nodes
                 '''
             }
         }
@@ -60,12 +66,10 @@ pipeline {
                 sh '''
                     set -e
 
-                    # Tag with in-cluster registry name (k3d-qa-registry:5000)
                     docker build \
                         -t ${REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER} \
                         .
 
-                    # Push via host-mapped port (same physical k3d registry)
                     docker tag \
                         ${REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER} \
                         ${HOST_REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER}
@@ -78,78 +82,43 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                withCredentials([
-                    file(
-                        credentialsId: 'k3d-kubeconfig',
-                        variable: 'KUBECONFIG'
-                    )
-                ]) {
-                    sh '''
-                        set -e
+                sh '''
+                    set -e
+                    source scripts/configure-jenkins-kubeconfig.sh
 
-                        configure_kubeconfig() {
-                            local kubeconfig
-                            kubeconfig=$(mktemp)
-                            cp "${KUBECONFIG}" "${kubeconfig}"
-                            export KUBECONFIG="${kubeconfig}"
-                            kubectl config set-cluster "${KUBE_CONTEXT}" \
-                                --server="${KUBE_SERVER}"
-                            kubectl config use-context "${KUBE_CONTEXT}"
-                        }
+                    echo "=== Kubernetes Cluster ==="
+                    kubectl get nodes
 
-                        configure_kubeconfig
+                    echo "=== Applying Manifests ==="
+                    kubectl apply -f k8s/
 
-                        echo "=== Kubernetes Cluster ==="
-                        kubectl get nodes
+                    echo "=== Updating Deployment Image ==="
+                    kubectl set image deployment/loan-service \
+                        loan-service=${CLUSTER_IMAGE} \
+                        -n ${NAMESPACE}
 
-                        echo "=== Applying Manifests ==="
-                        kubectl apply -f k8s/
-
-                        echo "=== Updating Deployment Image ==="
-                        kubectl set image deployment/loan-service \
-                            loan-service=${CLUSTER_IMAGE} \
-                            -n ${NAMESPACE}
-
-                        echo "=== Kubernetes Resources ==="
-                        kubectl get all -n ${NAMESPACE}
-                    '''
-                }
+                    echo "=== Kubernetes Resources ==="
+                    kubectl get all -n ${NAMESPACE}
+                '''
             }
         }
 
         stage('Wait for Application') {
             steps {
-                withCredentials([
-                    file(
-                        credentialsId: 'k3d-kubeconfig',
-                        variable: 'KUBECONFIG'
-                    )
-                ]) {
-                    sh '''
-                        configure_kubeconfig() {
-                            local kubeconfig
-                            kubeconfig=$(mktemp)
-                            cp "${KUBECONFIG}" "${kubeconfig}"
-                            export KUBECONFIG="${kubeconfig}"
-                            kubectl config set-cluster "${KUBE_CONTEXT}" \
-                                --server="${KUBE_SERVER}"
-                            kubectl config use-context "${KUBE_CONTEXT}"
-                        }
+                sh '''
+                    source scripts/configure-jenkins-kubeconfig.sh
 
-                        configure_kubeconfig
+                    echo "=== Waiting for Deployment ==="
+                    kubectl rollout status deployment/loan-service \
+                        -n ${NAMESPACE} \
+                        --timeout=120s
 
-                        echo "=== Waiting for Deployment ==="
-                        kubectl rollout status deployment/loan-service \
-                            -n ${NAMESPACE} \
-                            --timeout=120s
+                    echo "=== Pods ==="
+                    kubectl get pods -n ${NAMESPACE} -o wide
 
-                        echo "=== Pods ==="
-                        kubectl get pods -n ${NAMESPACE} -o wide
-
-                        echo "=== Services ==="
-                        kubectl get services -n ${NAMESPACE}
-                    '''
-                }
+                    echo "=== Services ==="
+                    kubectl get services -n ${NAMESPACE}
+                '''
             }
         }
 

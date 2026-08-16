@@ -186,15 +186,13 @@ GitHub → Jenkins (Docker) → mvn package → docker build
 JENKINS_CONTAINER=jenkins ./scripts/setup-jenkins-k3d-network.sh
 ```
 
-3. Generate and upload kubeconfig for Jenkins:
+3. Kubeconfig is generated automatically in the pipeline via `scripts/configure-jenkins-kubeconfig.sh` (no Jenkins credential required).
+
+   Optional — export a kubeconfig manually for local debugging:
 
 ```bash
 ./scripts/export-jenkins-kubeconfig.sh jenkins-kubeconfig.yaml
 ```
-
-In Jenkins, add a **Secret file** credential with ID `k3d-kubeconfig` using that file.
-
-> The host kubeconfig uses `https://0.0.0.0:<port>` which fails inside the Jenkins container with a TLS error. The export script rewrites the API server to `https://k3d-qa-cluster-serverlb:6443`.
 
 ### Registry naming
 
