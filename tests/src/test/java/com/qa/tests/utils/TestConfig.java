@@ -1,15 +1,19 @@
 package com.qa.tests.utils;
 
+import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 
 public final class TestConfig {
 
-    private static final String DEFAULT_BASE_URL = "http://localhost:8080";
+    private static final String DEFAULT_BASE_URL = "http://localhost:8081";
     private static final String[] BASE_URL_CANDIDATES = {
-            "http://localhost:8080",
-            "http://[::1]:8080",
-            "http://127.0.0.1:8080"
+            "http://localhost:8081",
+            "http://localhost:30080",
+            "http://127.0.0.1:8081",
+            "http://127.0.0.1:30080",
+            "http://[::1]:8081"
     };
 
     private TestConfig() {
@@ -27,7 +31,7 @@ public final class TestConfig {
         }
 
         for (String candidate : BASE_URL_CANDIDATES) {
-            if (isHealthy(candidate)) {
+            if (isLoanServiceHealthy(candidate)) {
                 return candidate;
             }
         }
@@ -51,7 +55,7 @@ public final class TestConfig {
         return baseUrl.replaceAll("/$", "");
     }
 
-    private static boolean isHealthy(String baseUrl) {
+    private static boolean isLoanServiceHealthy(String baseUrl) {
         try {
             HttpURLConnection connection = (HttpURLConnection) URI.create(baseUrl + "/actuator/health")
                     .toURL()
@@ -60,8 +64,17 @@ public final class TestConfig {
             connection.setConnectTimeout(2000);
             connection.setReadTimeout(2000);
             int status = connection.getResponseCode();
-            connection.disconnect();
-            return status == 200;
+            if (status != 200) {
+                connection.disconnect();
+                return false;
+            }
+
+            try (InputStream inputStream = connection.getInputStream()) {
+                String body = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+                return body.contains("\"status\":\"UP\"");
+            } finally {
+                connection.disconnect();
+            }
         } catch (Exception ignored) {
             return false;
         }

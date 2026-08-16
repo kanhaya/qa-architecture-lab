@@ -55,8 +55,8 @@ mvn spring-boot:run
 Verify:
 
 ```bash
-curl http://localhost:8080/actuator/health
-curl http://localhost:8080/api/loans
+curl http://localhost:8081/actuator/health
+curl http://localhost:8081/api/loans
 ```
 
 ### Configuration
@@ -65,7 +65,7 @@ Environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SERVER_PORT` | `8080` | HTTP port |
+| `SERVER_PORT` | `8081` | HTTP port (8081 avoids conflict with Jenkins on 8080) |
 | `APP_ENV` | `local` | Environment profile (`local`, `test`, `docker`, `kubernetes`) |
 
 ## Run Unit Tests
@@ -79,14 +79,14 @@ mvn test -pl loan-service
 ```bash
 mvn clean package -pl loan-service -am -DskipTests
 docker build -t loan-service:1.0 .
-docker run -p 8080:8080 -e APP_ENV=docker loan-service:1.0
+docker run -p 8081:8080 -e APP_ENV=docker loan-service:1.0
 ```
 
 Verify:
 
 ```bash
-curl http://localhost:8080/actuator/health
-curl http://localhost:8080/api/loans
+curl http://localhost:8081/actuator/health
+curl http://localhost:8081/api/loans
 ```
 
 ## Deploy to Kubernetes (k3d)
@@ -160,17 +160,19 @@ Or start port-forward in the background:
 | Kubernetes Dashboard | https://localhost:8443 |
 | Loan Service API | http://localhost:30080/api/loans |
 | Health check | http://localhost:30080/actuator/health |
-| Local dev (Spring Boot) | http://localhost:8080 |
+| Local dev (Spring Boot) | http://localhost:8081 |
 
 ## External CI/CD (Jenkins)
 
-Jenkins is **not bundled** with this project. Install and run Jenkins separately on your machine, then point a job at this repo's deploy script:
+Jenkins typically runs on **port 8080**, so the Loan Service defaults to **8081** locally to avoid conflicts.
+
+Use the included `Jenkinsfile` pipeline, or run the deploy script manually:
 
 ```bash
 ./scripts/deploy-and-test.sh
 ```
 
-A typical external Jenkins freestyle or pipeline job would run the same steps: Maven build, Docker build/push to `localhost:5001`, `kubectl apply`, validation, and smoke tests.
+The pipeline runs unit tests, deploys to k3d/Kubernetes, and executes smoke tests against `http://localhost:30080`.
 
 ## Run API Tests
 
@@ -180,12 +182,12 @@ The `tests/` module is a separate Maven project using REST Assured and JUnit 5. 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BASE_URL` | auto-detected | Service URL (e.g. `http://localhost:8080`) |
+| `BASE_URL` | auto-detected | Service URL (e.g. `http://localhost:8081` or `http://localhost:30080`) |
 | `env` | `local` | Target environment (`local`, `docker`, `kubernetes`) |
 
 ```bash
 # Ensure the application is running first
-export BASE_URL=http://localhost:8080
+export BASE_URL=http://localhost:8081
 
 # Smoke tests
 mvn test -pl tests -Dgroups=smoke
@@ -240,17 +242,21 @@ Configurable environment variables for scripts:
 
 ## Troubleshooting
 
-### Port 8080 already in use
+### Port 8081 already in use
 
-Another process may be bound to port 8080. Options:
+Another process may be bound to port 8081. Options:
 
 ```bash
 # Use a different port
-SERVER_PORT=8081 mvn spring-boot:run
+SERVER_PORT=8082 mvn spring-boot:run
 
 # Point tests at the correct URL
-BASE_URL=http://localhost:8081 mvn test -pl tests -Dgroups=smoke
+BASE_URL=http://localhost:8082 mvn test -pl tests -Dgroups=smoke
 ```
+
+### Jenkins on port 8080
+
+If Jenkins is running locally on `http://localhost:8080`, do **not** point API tests at port 8080 — you will hit Jenkins instead of the Loan Service. Use port `8081` for local dev or `30080` for Kubernetes.
 
 The test framework auto-detects a healthy endpoint on common localhost variants when `BASE_URL` is not set.
 

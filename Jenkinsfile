@@ -1,6 +1,11 @@
 pipeline {
     agent any
 
+    environment {
+        SERVER_PORT = '8081'
+        BASE_URL = 'http://localhost:30080'
+    }
+
     stages {
 
         stage('Checkout') {
@@ -19,20 +24,20 @@ pipeline {
                     kubectl version --client
 
                     echo "=== Maven ==="
-                    mvn --version
+                    ./mvnw --version
                 '''
             }
         }
 
-        stage('Maven Build & Test') {
+        stage('Unit Tests') {
             steps {
                 sh '''
-                    mvn clean test
+                    ./mvnw clean test -pl loan-service
                 '''
             }
         }
 
-        stage('Verify Kubernetes') {
+        stage('Deploy and API Tests') {
             steps {
                 withCredentials([
                     file(
@@ -42,7 +47,8 @@ pipeline {
                 ]) {
                     sh '''
                         kubectl get nodes
-                        kubectl get pods -A
+                        chmod +x scripts/*.sh
+                        ./scripts/deploy-and-test.sh
                     '''
                 }
             }
