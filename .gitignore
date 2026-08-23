@@ -26,3 +26,6 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Local-only scripts (not committed)
+scripts/manage-lab.sh

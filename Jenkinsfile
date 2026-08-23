@@ -6,6 +6,7 @@ pipeline {
         REGISTRY = 'k3d-qa-registry:5000'
         IMAGE_NAME = 'loan-service'
         CLUSTER_IMAGE = "${REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER}"
+        KEEP_IMAGES = '3'
 
         // Host-mapped registry port (Docker daemon pushes via host port mapping)
         HOST_REGISTRY = 'localhost:5001'
@@ -69,12 +70,8 @@ set -e
                     set -e
 
                     docker build \
-                        -t ${REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER} \
+                        -t ${HOST_REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER} \
                         .
-
-                    docker tag \
-                        ${REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER} \
-                        ${HOST_REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER}
 
                     docker push \
                         ${HOST_REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER}
@@ -139,6 +136,13 @@ set -e
         always {
             echo '=== Pipeline Finished ==='
             junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
+            sh '''#!/usr/bin/env bash
+set -e
+                    chmod +x scripts/prune-loan-images.sh
+                    echo "=== Pruning old ${IMAGE_NAME} images (keep last ${KEEP_IMAGES}) ==="
+                    KEEP_IMAGES="${KEEP_IMAGES}" IMAGE_NAME="${IMAGE_NAME}" BUILD_NUMBER="${BUILD_NUMBER}" \
+                        ./scripts/prune-loan-images.sh
+                '''
         }
         failure {
             echo 'Pipeline failed. Check console output above for the first error.'
