@@ -170,9 +170,9 @@ Or start port-forward in the background:
 Jenkins runs in a **Docker container** with access to the Docker socket, Maven, and `kubectl`. The pipeline in `Jenkinsfile` implements this flow:
 
 ```
-GitHub → Jenkins (Docker) → mvn package → docker build
-    → k3d Registry (k3d-qa-registry:5000) → k3d Cluster (qa-lab)
-    → kubectl set image → 3 replicas → REST Assured tests → JUnit report
+GitHub → Jenkins (Docker) → Quality Gate (mvn verify)
+    → docker build → k3d Registry (k3d-qa-registry:5000) → k3d Cluster
+    → kubectl set image → 3 replicas → REST Assured smoke → JUnit report
 ```
 
 ### One-time setup
@@ -338,13 +338,13 @@ kubectl -n qa-lab get events --sort-by='.lastTimestamp'
 | Phase | Status | Description |
 |-------|--------|-------------|
 | 1 — Spring Boot API | Done | REST API with in-memory storage |
-| 2 — Unit Tests | Done | Service, repository, controller tests |
+| 2 — Unit Tests | Done | Service, repository, controller, OpenAPI contract |
 | 3 — Docker | Done | Multi-stage Dockerfile with health check |
 | 4 — Kubernetes | Done | k3d deployment with 3 replicas |
 | 5 — API Automation | Done | REST Assured test framework |
 | 6 — Deployment Validation | Done | Post-deploy validation scripts |
 | 7 — Resilience Testing | Planned | Pod failure, scaling, rollback |
-| 8 — CI/CD | Done | Jenkins pipeline (build → deploy → smoke tests) |
+| 8 — CI/CD | Done | Jenkins Quality Gate → image → deploy → smoke |
 | 9 — Helm | Planned | Helm chart templating |
 | 10 — Argo CD | Planned | GitOps deployment |
 | 11 — Observability | Planned | Prometheus, Grafana, OpenTelemetry |

@@ -51,7 +51,7 @@ Build a **production-style QA Architecture Lab** that demonstrates the full life
 | Docker | Package the app as a portable container image |
 | Kubernetes (k3d) | Run 3 replicas with health probes and a NodePort service |
 | API automation | REST Assured smoke/functional/negative/regression suites |
-| CI/CD (Jenkins) | Automate build → image → deploy → test on every commit |
+| CI/CD (Jenkins) | Quality gate (tests + static analysis + OpenAPI contract) → image → deploy → smoke tests |
 
 **Target audience:** Senior SDETs and QA Architects learning how modern teams ship and validate microservices.
 
@@ -64,13 +64,14 @@ Build a **production-style QA Architecture Lab** that demonstrates the full life
 By the end of this lab you have:
 
 - ✅ A working **Loan Management REST API** with CRUD operations
-- ✅ **Unit tests** for service, repository, controller, and exception handling
+- ✅ **Unit and component tests** (`@WebMvcTest`) plus **OpenAPI contract tests** (in-process HTTP, no cluster)
+- ✅ **Static analysis** (Checkstyle, SpotBugs) bound to Maven `verify`
 - ✅ A **multi-stage Dockerfile** with a built-in health check
 - ✅ **Kubernetes manifests** (namespace, configmap, deployment, service)
 - ✅ A **k3d cluster** with an embedded Docker registry and NodePort access
 - ✅ **REST Assured API tests** (smoke, functional, negative, regression)
 - ✅ **Shell scripts** for cluster setup, deploy, validate, and dashboard
-- ✅ A **Jenkins pipeline** that builds, pushes, deploys, and runs smoke tests automatically
+- ✅ A **Jenkins pipeline** with a **Quality Gate before `docker build`**, then push, deploy, and cluster smoke tests
 - ✅ A **successful end-to-end build** from GitHub → Jenkins → k3d → passing tests
 
 ---
@@ -92,8 +93,8 @@ By the end of this lab you have:
            │
      ┌─────┴─────┐
      │           │
- mvn package   docker build
- -DskipTests        │
+ mvn verify    docker build
+ (Quality Gate)     │
      │              ▼
      │   ┌──────────────────────┐
      │   │   k3d Registry       │
@@ -223,15 +224,18 @@ JUnit 5 + Mockito tests inside `loan-service/src/test/`:
 | `InMemoryLoanRepositoryTest` | Data storage, seeded data |
 | `LoanControllerTest` | HTTP layer with MockMvc |
 | `GlobalExceptionHandlerTest` | Error responses (400, 404) |
+| `LoanApiContractTest` | OpenAPI contract via REST Assured on `RANDOM_PORT` |
 
 ### Why separate from API tests?
 
-Unit tests run **without a running server** — fast feedback in CI (`mvn test -pl loan-service`). API tests (Phase 5) require a deployed service.
+Unit, MockMvc, and contract tests run **without Kubernetes** — `mvn -pl loan-service verify` is the Jenkins Quality Gate. Phase 5 REST Assured (`tests` module) still needs a deployed service.
 
 ### How to run
 
 ```bash
 mvn test -pl loan-service
+# Full Quality Gate (tests + Checkstyle + SpotBugs + OpenAPI contract):
+mvn -pl loan-service -am verify
 ```
 
 ---
@@ -741,6 +745,10 @@ JENKINS_CONTAINER=jenkins ./scripts/setup-jenkins-k3d-network.sh
 
 The Quality Gate is the pre-image check: Checkstyle, SpotBugs, JUnit (`loan-service`), and OpenAPI contract tests against an in-process Spring Boot server (`RANDOM_PORT`). Cluster smoke tests (`tests` module) still run only after deploy.
 
+**Spec:** [`loan-service/src/main/resources/openapi/loan-service.yaml`](../loan-service/src/main/resources/openapi/loan-service.yaml). If a field or status code drifts from the spec, `verify` fails and Jenkins never builds an image.
+
+The Dockerfile still uses `mvn ... -DskipTests` **inside the image build**. That is packaging of the same source Jenkins already verified — not a substitute for the Quality Gate.
+
 ### Image tagging strategy
 
 Each build tags the image with the Jenkins `BUILD_NUMBER`:
@@ -1009,15 +1017,16 @@ Use this checklist every time you rebuild or debug the lab.
 | 6 | k3d API | `source scripts/configure-jenkins-kubeconfig.sh && kubectl get nodes` | Cluster reachable |
 | 7 | Registry DNS | `docker exec jenkins getent hosts k3d-qa-registry` | Returns IP |
 | 8 | Registry API | `curl http://k3d-qa-registry:5000/v2/_catalog` from Jenkins | JSON catalog |
-| 9 | Image push | `curl localhost:5001/v2/loan-service/tags/list` | Contains build tag |
-| 10 | Namespace | `kubectl get ns qa-lab` | Exists |
-| 11 | Deployment | `kubectl rollout status deployment/loan-service -n qa-lab` | Successfully rolled out |
-| 12 | Pods | `kubectl get pods -n qa-lab` | 3/3 Ready |
-| 13 | Service | `kubectl get svc -n qa-lab` | NodePort 30080 |
-| 14 | Health | `curl http://localhost:30080/actuator/health` | `{"status":"UP"}` |
-| 15 | API | `curl http://localhost:30080/api/loans` | JSON with loans 101, 102 |
-| 16 | REST Assured | Jenkins test stage | Smoke tests PASS |
-| 17 | Reports | Jenkins build page | Surefire/JUnit results visible |
+| 9 | Quality Gate | Jenkins **Quality Gate** stage | `mvn verify` green (unit, contract, Checkstyle, SpotBugs) |
+| 10 | Image push | `curl localhost:5001/v2/loan-service/tags/list` | Contains build tag |
+| 11 | Namespace | `kubectl get ns qa-lab` | Exists |
+| 12 | Deployment | `kubectl rollout status deployment/loan-service -n qa-lab` | Successfully rolled out |
+| 13 | Pods | `kubectl get pods -n qa-lab` | 3/3 Ready |
+| 14 | Service | `kubectl get svc -n qa-lab` | NodePort 30080 |
+| 15 | Health | `curl http://localhost:30080/actuator/health` | `{"status":"UP"}` |
+| 16 | API | `curl http://localhost:30080/api/loans` | JSON with loans 101, 102 |
+| 17 | REST Assured | Jenkins test stage | Smoke tests PASS |
+| 18 | Reports | Jenkins build page | Surefire/JUnit results visible |
 
 ---
 
@@ -1025,13 +1034,17 @@ Use this checklist every time you rebuild or debug the lab.
 
 ### 15.1 Sixty-second interview answer
 
-> "I built a local CI/CD environment where Jenkins runs in Docker and orchestrates the complete test-deployment lifecycle. Jenkins checks out a Maven project from GitHub, builds the application, packages it into a Docker image tagged with the Jenkins build number, and pushes it to a local k3d registry. Kubernetes deploys that exact image through a Deployment with three replicas and exposes it through a NodePort Service. The pipeline waits for rollout readiness before executing REST Assured smoke tests. Results are published back to Jenkins. I intentionally separated application build from environment-dependent API tests because the latter require a live deployed service."
+> "I built a local CI/CD environment where Jenkins runs in Docker and orchestrates the full test-deployment lifecycle. After checkout, a Quality Gate runs `mvn verify` on loan-service: unit tests, MockMvc, OpenAPI contract tests on a random port, Checkstyle, and SpotBugs. Only if that passes does Jenkins build and push a Docker image tagged with the build number to a local k3d registry. Kubernetes deploys that image with three replicas. The pipeline waits for rollout, then runs REST Assured smoke tests against the live NodePort. I separated in-process quality (no cluster) from black-box API tests (need a deployed service)."
 
 ### 15.2 Common interview questions
 
-**Q: Why not run `mvn test` first?**
+**Q: Do you run tests before the image?**
 
-> These are black-box API tests against a running service. Running them during the initial Maven build creates a hidden environment dependency. I build and package first, deploy the exact image, wait for readiness, then execute REST Assured.
+> Yes. The Quality Gate is `mvn -pl loan-service -am verify`. That covers unit tests, `@WebMvcTest`, OpenAPI contract tests on `RANDOM_PORT`, Checkstyle, and SpotBugs. A failure never reaches `docker build`. Cluster REST Assured in the `tests` module still runs only after deploy, because those tests need a live URL.
+
+**Q: Why skip tests inside the Dockerfile?**
+
+> Jenkins already verified the same source. The Docker `mvn ... -DskipTests` step is packaging, not a second test run. Contract and unit tests do not belong in the image build.
 
 **Q: Why Kubernetes Service?**
 
@@ -1071,10 +1084,10 @@ git clone https://github.com/kanhaya/qa-architecture-lab.git
 cd qa-architecture-lab
 ```
 
-### Step 2 — Run unit tests
+### Step 2 — Run the Quality Gate
 
 ```bash
-mvn test -pl loan-service
+mvn -pl loan-service -am verify
 ```
 
 ### Step 3 — Run locally
@@ -1179,9 +1192,9 @@ The local lab is intentionally simple. The same architecture evolves into a prod
 |-----------|---------------------|
 | k3d local registry | GHCR, ECR, GCR, or enterprise registry with TLS |
 | Build-number tags | Immutable image digests for provenance |
-| Single Jenkins pipeline | Separate build, publish, and deploy jobs |
-| Smoke tests only | Smoke → functional → regression stages |
-| No security scanning | SAST, SCA, container scanning |
+| Single Jenkins pipeline | Separate PR CI, build, publish, and deploy jobs |
+| In-process Quality Gate (Checkstyle, SpotBugs, OpenAPI) | SonarQube quality gate, SAST, SCA, container scanning |
+| Cluster smoke tests after deploy | Smoke → functional → regression → perf/security stages |
 | Static k8s YAML | Helm or Kustomize per environment |
 | Manual cluster | Ephemeral namespaces per PR/build |
 | No observability | Prometheus, Grafana, centralized logs |
@@ -1191,15 +1204,15 @@ The local lab is intentionally simple. The same architecture evolves into a prod
 ```
 Local learning lab
       ↓
-CI pipeline (Jenkins)
+Quality Gate (unit, contract, static analysis)
       ↓
 Container registry
       ↓
 Kubernetes deployment
       ↓
-Automated API validation
+Cluster smoke / API tests
       ↓
-Security + quality gates
+Deeper security (SAST, SCA, container scan)
       ↓
 Ephemeral test environments
       ↓
@@ -1213,7 +1226,7 @@ Observability + automated diagnosis
 The most reusable lesson is the **dependency chain**:
 
 ```
-source → build artifact → container image → registry → Kubernetes workload → Service → automated validation
+source → quality gate → container image → registry → Kubernetes workload → Service → cluster smoke
 ```
 
 When a pipeline fails, locate the broken link in that chain and inspect that layer directly.
@@ -1225,12 +1238,12 @@ When a pipeline fails, locate the broken link in that chain and inspect that lay
 | Phase | Built | Achieved |
 |-------|-------|----------|
 | 1 — Spring Boot | REST API + actuator | Runnable microservice |
-| 2 — Unit tests | JUnit/Mockito | Fast CI feedback |
+| 2 — Unit tests | JUnit/Mockito + OpenAPI contract | Fast CI feedback without a cluster |
 | 3 — Docker | Multi-stage image | Portable, health-checked container |
 | 4 — Kubernetes | k3d + manifests | 3 replicas, NodePort, probes |
-| 5 — API tests | REST Assured suites | Automated API validation |
+| 5 — API tests | REST Assured suites | Automated API validation on the cluster |
 | 6 — Scripts | deploy-and-test.sh etc. | One-command operations |
-| 7 — Jenkins | Full CI/CD pipeline | GitHub → deploy → test on every build |
+| 7 — Jenkins | Quality Gate → image → deploy → smoke | Bad commits never produce an image |
 
 **Overall goal achieved:** A complete, hands-on QA Architecture Lab demonstrating how a real team builds, containers, deploys to Kubernetes, and validates a microservice — with Jenkins automating the entire flow.
 
