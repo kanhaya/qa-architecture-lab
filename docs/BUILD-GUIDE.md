@@ -733,11 +733,13 @@ JENKINS_CONTAINER=jenkins ./scripts/setup-jenkins-k3d-network.sh
 |---|-------|-------------|-----|
 | 1 | **Checkout** | Pulls code from GitHub | Always start from latest commit |
 | 2 | **Verify Environment** | Checks docker, kubectl, mvn, registry, k3d API | Fail fast if infrastructure is broken |
-| 3 | **Build Application** | `mvn clean package -DskipTests` | Compile JAR without waiting for API tests |
+| 3 | **Quality Gate** | `mvn -pl loan-service -am clean verify` | Unit tests, `@WebMvcTest`, OpenAPI contract (`RANDOM_PORT` — **not** k3d / `localhost:30080`), Checkstyle, and SpotBugs. Failure stops the pipeline; no image is built. |
 | 4 | **Build Docker Image** | `docker build` + `docker push` | Package app, push to k3d registry |
 | 5 | **Deploy to Kubernetes** | `kubectl apply` + `kubectl set image` | Roll out new image to 3 pods |
 | 6 | **Wait for Application** | `kubectl rollout status` | Ensure pods are healthy before testing |
 | 7 | **Run REST Assured Tests** | `mvn test -pl tests -Dgroups=smoke` | Validate deployed API automatically |
+
+The Quality Gate is the pre-image check: Checkstyle, SpotBugs, JUnit (`loan-service`), and OpenAPI contract tests against an in-process Spring Boot server (`RANDOM_PORT`). Cluster smoke tests (`tests` module) still run only after deploy.
 
 ### Image tagging strategy
 
@@ -886,9 +888,9 @@ curl http://localhost:8080/
 
 **Cause:** Functional tests ran during `mvn clean test` before the API was deployed.
 
-**Fix:** Use `mvn clean package -DskipTests` in build stage. Deploy first, wait for rollout, then run `mvn test -pl tests`.
+**Fix:** Jenkins **Quality Gate** (`mvn -pl loan-service -am verify`) runs unit/component/contract tests before the image. REST Assured in `tests` still runs only after deploy and rollout.
 
-**Key lesson:** Maven builds the software. Kubernetes runs it. REST Assured validates the **running** system.
+**Key lesson:** Maven proves the code. Kubernetes runs the image. REST Assured (`tests`) validates the **running** system.
 
 ---
 

@@ -55,11 +55,11 @@ set -e
             }
         }
 
-        stage('Build Application') {
+        stage('Quality Gate') {
             steps {
                 sh '''
-                    echo "=== Building Application ==="
-                    mvn clean package -DskipTests
+                    echo "=== Quality Gate: unit, component, contract, static analysis ==="
+                    mvn -pl loan-service -am clean verify
                 '''
             }
         }
