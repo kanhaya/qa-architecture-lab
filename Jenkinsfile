@@ -126,12 +126,13 @@ set -e
                     kubectl get nodes
 
                     echo "=== Applying Manifests ==="
-                    kubectl apply -f k8s/
+                    kubectl apply -f k8s/namespace.yaml
+                    kubectl apply -f k8s/configmap.yaml
+                    kubectl apply -f k8s/service.yaml
+                    sed "s|image: qa-registry:5000/loan-service:1.0|image: ${CLUSTER_IMAGE}|" \
+                        k8s/deployment.yaml | kubectl apply -f -
 
-                    echo "=== Updating Deployment Image ==="
-                    kubectl set image deployment/loan-service \
-                        loan-service=${CLUSTER_IMAGE} \
-                        -n ${NAMESPACE}
+                    kubectl scale deployment/loan-service --replicas=1 -n ${NAMESPACE}
 
                     echo "=== Kubernetes Resources ==="
                     kubectl get all -n ${NAMESPACE}

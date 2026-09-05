@@ -6,7 +6,8 @@ metadata:
   namespace: qa-lab
 
 spec:
-  replicas: 3
+  replicas: 1
+  revisionHistoryLimit: 0
 
   selector:
     matchLabels:

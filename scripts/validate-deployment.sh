@@ -6,7 +6,7 @@ DEPLOYMENT="${DEPLOYMENT:-loan-service}"
 SERVICE="${SERVICE:-loan-service}"
 BASE_URL="${BASE_URL:-http://localhost:30080}"
 TIMEOUT="${TIMEOUT:-120}"
-DESIRED_REPLICAS="${DESIRED_REPLICAS:-3}"
+DESIRED_REPLICAS="${DESIRED_REPLICAS:-1}"
 
 log() {
   echo "[validate-deployment] $*"
