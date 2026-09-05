@@ -135,7 +135,7 @@ curl http://localhost:8081/api/loans
 ```
 
 This creates a k3d cluster with:
-- Embedded registry at `localhost:5001` (in-cluster: `k3d-qa-registry:5000`)
+- Embedded registry at `localhost:5001` (in-cluster: `qa-registry:5000`)
 - NodePort mapping for the service at `http://localhost:30080`
 - Namespace `qa-lab` and all manifests applied
 
@@ -146,7 +146,7 @@ docker build -t localhost:5001/loan-service:1.0 .
 docker push localhost:5001/loan-service:1.0
 kubectl apply -f k8s/
 kubectl set image deployment/loan-service \
-  loan-service=k3d-qa-registry:5000/loan-service:1.0 -n qa-lab
+  loan-service=qa-registry:5000/loan-service:1.0 -n qa-lab
 ```
 
 Or use the all-in-one script:
@@ -194,7 +194,7 @@ Jenkins runs in a **Docker container** with access to the Docker socket, Maven, 
 ```
 GitHub → Jenkins (Docker) → Quality Gate (mvn verify + JaCoCo)
     → SonarQube (sonar.qualitygate.wait=true)
-    → docker build → k3d Registry (k3d-qa-registry:5000) → k3d Cluster
+    → docker build → k3d Registry (qa-registry:5000) → k3d Cluster
     → kubectl set image → 3 replicas → REST Assured smoke → JUnit report
 ```
 
@@ -278,10 +278,10 @@ Install SonarLint / SonarQube for IDE in IntelliJ or VS Code and bind **Connecte
 
 | Context | Registry URL | Why |
 |---------|--------------|-----|
-| **Image tag / cluster pull** | `k3d-qa-registry:5000` | In-cluster DNS name used by Kubernetes |
+| **Image tag / cluster pull** | `qa-registry:5000` | In-cluster DNS name used by Kubernetes (HTTP, injected by k3d) |
 | **docker push from Jenkins** | `localhost:5001` | Host-mapped port to the **same** k3d registry |
 
-The pipeline tags images as `k3d-qa-registry:5000/loan-service:<build>` (matching the diagram) and pushes via `localhost:5001` because the Docker daemon reaches the registry through the host port mapping.
+The pipeline sets the deployment image to `qa-registry:5000/loan-service:<build>` and pushes via `localhost:5001` because the Docker daemon reaches the registry through the host port mapping.
 
 ### Service URL for tests
 
@@ -388,7 +388,7 @@ docker build -t localhost:5001/loan-service:1.0 .
 docker push localhost:5001/loan-service:1.0
 ```
 
-Ensure the deployment image uses `k3d-qa-registry:5000/loan-service:<tag>` (in-cluster registry port is 5000).
+Ensure the deployment image uses `qa-registry:5000/loan-service:<tag>` (in-cluster registry port is 5000).
 
 ### Pods not becoming Ready
 

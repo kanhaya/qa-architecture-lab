@@ -15,7 +15,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# Match Jenkinsfile (k3d-qa-cluster, k3d-qa-registry:5000)
+# Match Jenkinsfile (k3d-qa-cluster, qa-registry:5000)
 export K3D_CLUSTER="${K3D_CLUSTER:-qa-cluster}"
 export REGISTRY_NAME="${REGISTRY_NAME:-qa-registry}"
 export REGISTRY_HOST_PORT="${REGISTRY_HOST_PORT:-5001}"

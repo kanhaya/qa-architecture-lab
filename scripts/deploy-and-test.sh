@@ -13,7 +13,7 @@ REGISTRY="${REGISTRY:-localhost:5001}"
 IMAGE_NAME="${IMAGE_NAME:-loan-service}"
 IMAGE_TAG="${IMAGE_TAG:-1.0}"
 FULL_IMAGE="${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
-CLUSTER_IMAGE="k3d-qa-registry:5000/${IMAGE_NAME}:${IMAGE_TAG}"
+CLUSTER_IMAGE="qa-registry:5000/${IMAGE_NAME}:${IMAGE_TAG}"
 
 log() {
   echo "[deploy-and-test] $*"

@@ -111,7 +111,7 @@ log "Removing loan-service lab images..."
 while IFS= read -r img; do
   [[ -z "${img}" ]] && continue
   safe_rmi "${img}"
-done < <(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'loan-service|k3d-qa-registry|k3d-qa-lab-registry' || true)
+done < <(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'loan-service|k3d-qa-registry|qa-registry|k3d-qa-lab-registry' || true)
 
 log "Removing dangling images and stopped leftovers from this teardown..."
 docker container prune -f >/dev/null 2>&1 || true

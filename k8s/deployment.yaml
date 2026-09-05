@@ -21,7 +21,7 @@ spec:
       containers:
         - name: loan-service
 
-          image: k3d-qa-registry:5000/loan-service:1.0
+          image: qa-registry:5000/loan-service:1.0
 
           imagePullPolicy: IfNotPresent
 

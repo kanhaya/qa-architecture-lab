@@ -100,7 +100,7 @@ By the end of this lab you have:
      │              ▼
      │   ┌──────────────────────┐
      │   │   k3d Registry       │
-     │   │ k3d-qa-registry:5000 │
+     │   │ qa-registry:5000 │
      │   │ (push via :5001)     │
      │   └──────────┬───────────┘
      │              │
@@ -301,7 +301,7 @@ Kubernetes manifests in `k8s/`:
 |-----------|-------|
 | Cluster name | `qa-lab` (default) or `qa-cluster` (your setup) |
 | Registry (host) | `localhost:5001` |
-| Registry (in-cluster) | `k3d-qa-registry:5000` |
+| Registry (in-cluster) | `qa-registry:5000` |
 | NodePort | `30080` |
 | Namespace | `qa-lab` |
 
@@ -312,7 +312,7 @@ k3d exposes **one physical registry** under two names:
 ```
 Your Mac / Docker daemon          Kubernetes pods
         │                                │
-   localhost:5001  ──same registry──  k3d-qa-registry:5000
+   localhost:5001  ──same registry──  qa-registry:5000
    (docker push)                     (image pull)
 ```
 
@@ -323,7 +323,7 @@ Your Mac / Docker daemon          Kubernetes pods
 replicas: 3
 readinessProbe: GET /actuator/health (port 8080)
 livenessProbe:  GET /actuator/health (port 8080)
-image: k3d-qa-registry:5000/loan-service:1.0
+image: qa-registry:5000/loan-service:1.0
 ```
 
 ### How to deploy manually
@@ -336,7 +336,7 @@ docker push localhost:5001/loan-service:1.0
 
 kubectl apply -f k8s/
 kubectl set image deployment/loan-service \
-  loan-service=k3d-qa-registry:5000/loan-service:1.0 -n qa-lab
+  loan-service=qa-registry:5000/loan-service:1.0 -n qa-lab
 
 kubectl get pods -n qa-lab
 curl http://localhost:30080/actuator/health
@@ -424,7 +424,7 @@ scripts/
 1. Checks `k3d` is installed
 2. If cluster exists → skips creation, ensures NodePort `30080` is mapped
 3. If cluster does not exist → creates cluster with:
-   - Embedded registry at `localhost:5001` (in-cluster: `k3d-qa-registry:5000`)
+   - Embedded registry at `localhost:5001` (in-cluster: `qa-registry:5000`)
    - NodePort mapping `30080:30080` for the Loan Service
    - 2 agent nodes (worker capacity)
 4. Runs `kubectl apply -f k8s/` (namespace, configmap, deployment, service)
@@ -440,7 +440,7 @@ scripts/
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `K3D_CLUSTER` | `qa-cluster` | k3d cluster name (matches Jenkinsfile) |
-| `REGISTRY_NAME` | `qa-registry` | Registry name (becomes `k3d-qa-registry`) |
+| `REGISTRY_NAME` | `qa-registry` | Registry name (becomes `qa-registry`) |
 | `REGISTRY_HOST_PORT` | `5001` | Host port for `docker push` |
 | `NODE_PORT` | `30080` | NodePort exposed on host |
 | `AGENTS` | `2` | Number of k3d agent nodes |
@@ -449,7 +449,7 @@ scripts/
 
 ```
 Registry (host push):  localhost:5001
-Registry (in-cluster): k3d-qa-registry:5000
+Registry (in-cluster): qa-registry:5000
 Service URL:           http://localhost:30080
 Namespace:             qa-lab
 ```
@@ -576,9 +576,9 @@ Skip pieces with `SKIP_JENKINS=1`, `SKIP_SONAR=1`, or `SKIP_DASHBOARD=1`.
 
 ### 9.7 `setup-jenkins-k3d-network.sh` — Connect Jenkins to k3d network
 
-**Purpose:** Connects the Jenkins Docker container to the k3d cluster's Docker network so Jenkins can resolve `k3d-qa-registry`, reach the Kubernetes API, and hit the Loan Service NodePort.
+**Purpose:** Connects the Jenkins Docker container to the k3d cluster's Docker network so Jenkins can resolve `qa-registry`, reach the Kubernetes API, and hit the Loan Service NodePort.
 
-**Why needed:** By default Jenkins runs on the `bridge` network and cannot resolve k3d hostnames (`k3d-qa-registry`, `k3d-qa-cluster-server-0`). Without this, registry checks, kubectl, and API tests fail inside Jenkins.
+**Why needed:** By default Jenkins runs on the `bridge` network and cannot resolve k3d hostnames (`qa-registry`, `k3d-qa-cluster-server-0`). Without this, registry checks, kubectl, and API tests fail inside Jenkins.
 
 **What it does:**
 
@@ -596,7 +596,7 @@ JENKINS_CONTAINER=jenkins ./scripts/setup-jenkins-k3d-network.sh
 
 | Target | URL |
 |--------|-----|
-| Registry | `k3d-qa-registry:5000` |
+| Registry | `qa-registry:5000` |
 | Loan Service | `http://k3d-qa-cluster-server-0:30080` |
 | Kubernetes API | `https://k3d-qa-cluster-serverlb:6443` |
 
@@ -745,7 +745,7 @@ The Dockerfile still uses `mvn ... -DskipTests` **inside the image build**. That
 Each build tags the image with the Jenkins `BUILD_NUMBER`:
 
 ```
-Build:   k3d-qa-registry:5000/loan-service:27
+Build:   qa-registry:5000/loan-service:27
 Push:    localhost:5001/loan-service:27        (same registry, host port)
 Deploy:  kubectl set image … loan-service:27
 ```
@@ -753,7 +753,7 @@ Deploy:  kubectl set image … loan-service:27
 ### Key environment variables in Jenkinsfile
 
 ```groovy
-REGISTRY      = 'k3d-qa-registry:5000'    // in-cluster image name
+REGISTRY      = 'qa-registry:5000'    // in-cluster image name
 HOST_REGISTRY = 'localhost:5001'          // docker push target
 BASE_URL      = 'http://k3d-qa-cluster-server-0:30080'  // API tests from Jenkins
 NAMESPACE     = 'qa-lab'
@@ -820,13 +820,13 @@ curl http://localhost:9000/api/system/status
 
 ---
 
-### Problem 2: `k3d-qa-registry:5000` — no such host
+### Problem 2: `qa-registry:5000` — no such host
 
-**Symptom:** `docker push k3d-qa-registry:5000` failed with DNS lookup error.
+**Symptom:** `docker push qa-registry:5000` failed with DNS lookup error.
 
 **Cause:** That hostname only exists on the k3d Docker network, not on the host where the Docker daemon runs.
 
-**Fix:** Tag image as `k3d-qa-registry:5000/...` but push via `localhost:5001` (same physical registry).
+**Fix:** Tag image as `qa-registry:5000/...` but push via `localhost:5001` (same physical registry).
 
 ---
 
@@ -908,7 +908,7 @@ curl http://localhost:9000/api/system/status
 
 ```bash
 k3d registry create qa-registry --port 5001
-k3d cluster create qa-cluster --registry-use k3d-qa-registry:5000
+k3d cluster create qa-cluster --registry-use qa-registry:5000
 ```
 
 **Diagnostic:** `kubectl describe pod <pod-name> -n qa-lab` — read the Events section.
@@ -921,7 +921,7 @@ k3d cluster create qa-cluster --registry-use k3d-qa-registry:5000
 
 **Cause:** Deployment manifest has a static tag; pipeline builds with `${BUILD_NUMBER}`.
 
-**Fix:** `kubectl set image deployment/loan-service loan-service=k3d-qa-registry:5000/loan-service:${BUILD_NUMBER} -n qa-lab`
+**Fix:** `kubectl set image deployment/loan-service loan-service=qa-registry:5000/loan-service:${BUILD_NUMBER} -n qa-lab`
 
 **Diagnostic:**
 
@@ -937,7 +937,7 @@ kubectl get pod -n qa-lab -o jsonpath='{.items[0].spec.containers[0].image}'
 
 **Cause:** Inside Jenkins, `localhost` means the Jenkins container itself — not the Mac host.
 
-**Fix:** For HTTP checks from Jenkins, use `k3d-qa-registry:5000`. For `docker push` via socket, use `localhost:5001` (Docker daemon on host).
+**Fix:** For HTTP checks from Jenkins, use `qa-registry:5000`. For `docker push` via socket, use `localhost:5001` (Docker daemon on host).
 
 ---
 
@@ -960,8 +960,8 @@ docker exec jenkins kubectl version --client
 
 ```bash
 docker network inspect k3d-qa-cluster
-docker exec jenkins getent hosts k3d-qa-registry
-docker exec jenkins curl -sf http://k3d-qa-registry:5000/v2/_catalog
+docker exec jenkins getent hosts qa-registry
+docker exec jenkins curl -sf http://qa-registry:5000/v2/_catalog
 curl -sf http://localhost:5001/v2/_catalog
 curl -sf http://localhost:5001/v2/loan-service/tags/list
 ```
@@ -1011,8 +1011,8 @@ Use this checklist every time you rebuild or debug the lab.
 | 4 | Docker | `docker --version` in Jenkins | Docker 20+ |
 | 5 | kubectl | `kubectl get nodes` | Node Ready |
 | 6 | k3d API | `source scripts/configure-jenkins-kubeconfig.sh && kubectl get nodes` | Cluster reachable |
-| 7 | Registry DNS | `docker exec jenkins getent hosts k3d-qa-registry` | Returns IP |
-| 8 | Registry API | `curl http://k3d-qa-registry:5000/v2/_catalog` from Jenkins | JSON catalog |
+| 7 | Registry DNS | `docker exec jenkins getent hosts qa-registry` | Returns IP |
+| 8 | Registry API | `curl http://qa-registry:5000/v2/_catalog` from Jenkins | JSON catalog |
 | 9 | Quality Gate | Jenkins **Quality Gate** stage | `mvn verify` green (unit, contract, JaCoCo ≥ 80%, Checkstyle, SpotBugs) |
 | 9b | SonarQube | Jenkins **SonarQube** stage + http://localhost:9000 | Quality gate `qa-lab-new-code` green (`wait=true` except spike/experiment) |
 | 10 | Image push | `curl localhost:5001/v2/loan-service/tags/list` | Contains build tag |

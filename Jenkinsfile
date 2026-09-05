@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         // In-cluster registry name (same registry the k3d cluster pulls from)
-        REGISTRY = 'k3d-qa-registry:5000'
+        REGISTRY = 'qa-registry:5000'
         IMAGE_NAME = 'loan-service'
         CLUSTER_IMAGE = "${REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER}"
         KEEP_IMAGES = '3'

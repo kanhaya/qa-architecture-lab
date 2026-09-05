@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Connects a Jenkins Docker container to the k3d cluster network so it can:
-#   - resolve k3d-qa-registry:5000
+#   - resolve qa-registry:5000
 #   - reach the Loan Service NodePort at k3d-qa-lab-server-0:30080
 #
 # Prerequisites:
@@ -41,7 +41,7 @@ fi
 
 log ""
 log "Jenkins is now on the k3d network."
-log "  Registry (in-cluster name): k3d-qa-registry:5000"
+log "  Registry (in-cluster name): qa-registry:5000"
 log "  Registry (host push port):  localhost:5001"
 log "  Service URL (from Jenkins): http://k3d-qa-cluster-server-0:30080"
 log "  Kubernetes API (from Jenkins): https://k3d-qa-cluster-serverlb:6443"
