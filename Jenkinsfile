@@ -19,6 +19,8 @@ pipeline {
         K3D_IMAGE = 'ghcr.io/k3d-io/k3d:5.8.3'
         BASE_URL = 'http://k3d-qa-cluster-server-0:30080'
         NAMESPACE = 'qa-lab'
+
+        SONAR_HOST_URL = 'http://sonarqube:9000'
     }
 
     stages {
@@ -47,6 +49,10 @@ set -e
                     curl -sf http://${REGISTRY}/v2/_catalog || \
                         echo "WARNING: registry not reachable at ${REGISTRY}"
 
+                    echo "=== SonarQube ==="
+                    curl -sf ${SONAR_HOST_URL}/api/system/status || \
+                        echo "WARNING: SonarQube not reachable at ${SONAR_HOST_URL}"
+
                     echo "=== k3d API ==="
                     chmod +x scripts/configure-jenkins-kubeconfig.sh
                     source scripts/configure-jenkins-kubeconfig.sh
@@ -58,13 +64,38 @@ set -e
         stage('Quality Gate') {
             steps {
                 sh '''
-                    echo "=== Quality Gate: unit, component, contract, static analysis ==="
+                    echo "=== Quality Gate: unit, component, contract, JaCoCo, static analysis ==="
                     mvn -pl loan-service -am clean verify
                 '''
             }
         }
 
+        stage('SonarQube') {
+            steps {
+                script {
+                    def branch = env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main'
+                    def waitForGate = !(branch.contains('spike/') || branch.contains('experiment/'))
+                    echo "Branch=${branch} sonar.qualitygate.wait=${waitForGate}"
+                    withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
+                        sh """
+                            mvn -pl loan-service -am sonar:sonar \\
+                                -Dsonar.host.url=${SONAR_HOST_URL} \\
+                                -Dsonar.token=\${SONAR_TOKEN} \\
+                                -Dsonar.qualitygate.wait=${waitForGate} \\
+                                -Dsonar.projectVersion=${BUILD_NUMBER}
+                        """
+                    }
+                }
+            }
+        }
+
         stage('Build Docker Image') {
+            when {
+                expression {
+                    def b = env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main'
+                    return b == 'main' || b.endsWith('/main')
+                }
+            }
             steps {
                 sh '''
                     set -e
@@ -80,6 +111,12 @@ set -e
         }
 
         stage('Deploy to Kubernetes') {
+            when {
+                expression {
+                    def b = env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main'
+                    return b == 'main' || b.endsWith('/main')
+                }
+            }
             steps {
                 sh '''#!/usr/bin/env bash
 set -e
@@ -103,6 +140,12 @@ set -e
         }
 
         stage('Wait for Application') {
+            when {
+                expression {
+                    def b = env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main'
+                    return b == 'main' || b.endsWith('/main')
+                }
+            }
             steps {
                 sh '''#!/usr/bin/env bash
 set -e
@@ -123,6 +166,12 @@ set -e
         }
 
         stage('Run REST Assured Tests') {
+            when {
+                expression {
+                    def b = env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main'
+                    return b == 'main' || b.endsWith('/main')
+                }
+            }
             steps {
                 sh """
                     echo "=== Running REST Assured Tests against ${BASE_URL} ==="
@@ -136,8 +185,12 @@ set -e
         always {
             echo '=== Pipeline Finished ==='
             junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
+            archiveArtifacts allowEmptyArchive: true, artifacts: 'loan-service/target/site/jacoco/**'
             sh '''#!/usr/bin/env bash
-set -e
+                    if ! command -v docker >/dev/null 2>&1; then
+                      echo "Skipping image prune: docker CLI not in this agent"
+                      exit 0
+                    fi
                     chmod +x scripts/prune-loan-images.sh
                     echo "=== Pruning old ${IMAGE_NAME} images (keep last ${KEEP_IMAGES}) ==="
                     KEEP_IMAGES="${KEEP_IMAGES}" IMAGE_NAME="${IMAGE_NAME}" BUILD_NUMBER="${BUILD_NUMBER}" \

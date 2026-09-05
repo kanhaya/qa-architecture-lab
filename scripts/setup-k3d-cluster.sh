@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-K3D_CLUSTER="${K3D_CLUSTER:-qa-lab}"
+K3D_CLUSTER="${K3D_CLUSTER:-qa-cluster}"
 REGISTRY_NAME="${REGISTRY_NAME:-qa-registry}"
 REGISTRY_HOST_PORT="${REGISTRY_HOST_PORT:-5001}"
 NODE_PORT="${NODE_PORT:-30080}"
@@ -18,10 +18,6 @@ fi
 
 if k3d cluster list 2>/dev/null | grep -q "${K3D_CLUSTER}"; then
   log "Cluster '${K3D_CLUSTER}' already exists. Skipping creation."
-  if ! lsof -nP -iTCP:"${NODE_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
-    log "Adding NodePort mapping ${NODE_PORT} to existing cluster..."
-    k3d cluster edit "${K3D_CLUSTER}" --port-add "${NODE_PORT}:${NODE_PORT}@server:0" || true
-  fi
   log "To recreate: k3d cluster delete ${K3D_CLUSTER} && re-run this script"
 else
   log "Creating k3d cluster '${K3D_CLUSTER}' with registry and NodePort mapping..."
@@ -32,7 +28,10 @@ else
 fi
 
 log "Applying Kubernetes manifests..."
-kubectl apply -f "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/k8s/"
+K8S_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/k8s"
+kubectl apply -f "${K8S_DIR}/namespace.yaml"
+kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/qa-lab --timeout=30s
+kubectl apply -f "${K8S_DIR}/"
 
 log ""
 log "Cluster ready."

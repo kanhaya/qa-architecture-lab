@@ -27,7 +27,7 @@ log "  URL:   https://localhost:${LOCAL_PORT}"
 if [[ -n "${TOKEN}" ]]; then
   log "  Token: ${TOKEN}"
 else
-  log "  Run ./scripts/setup-k8s-dashboard.sh first to create dashboard-admin."
+  log "  Run ./scripts/up.sh first so dashboard-admin exists."
 fi
 log ""
 log "In the dashboard, navigate to namespace: qa-lab"

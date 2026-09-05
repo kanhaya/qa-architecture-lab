@@ -16,6 +16,7 @@
 
     <properties>
         <junit.jupiter.version>5.10.5</junit.jupiter.version>
+        <sonar.skip>true</sonar.skip>
     </properties>
 
     <dependencies>

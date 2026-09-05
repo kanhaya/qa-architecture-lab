@@ -17,7 +17,9 @@ qa-architecture-lab/
 ├── tests/                 # REST Assured API automation (separate module)
 ├── k8s/                   # Kubernetes manifests
 ├── scripts/               # Setup, deployment, and validation scripts
+├── docker-compose.sonarqube.yml
 ├── Dockerfile
+├── Jenkinsfile
 └── pom.xml                # Maven parent POM
 ```
 
@@ -28,6 +30,30 @@ qa-architecture-lab/
 - Docker
 - k3d (for local Kubernetes)
 - kubectl
+
+## Start the full lab
+
+One command starts Docker (if needed), the k3d cluster Jenkins expects (`qa-cluster`), SonarQube, Jenkins, and the Docker networks:
+
+```bash
+./scripts/up.sh
+```
+
+Then open http://localhost:8080, add credential `SONAR_TOKEN` from the script output, and **Build Now** on `qa-k3d-pipeline` (`main`).
+
+Skip pieces with `SKIP_JENKINS=1`, `SKIP_SONAR=1`, or `SKIP_DASHBOARD=1`.
+
+Stop everything and reclaim this lab's Docker disk (loan-service images, Sonar volumes, k3d cluster — not unrelated images on your machine):
+
+```bash
+./scripts/down.sh
+```
+
+Remove Sonar/Jenkins/k3s images and Jenkins home as well:
+
+```bash
+./scripts/down.sh --purge
+```
 
 ## API Endpoints
 
@@ -76,6 +102,14 @@ Environment variables:
 ```bash
 mvn test -pl loan-service
 ```
+
+In-process quality gate (unit/contract tests, **JaCoCo ≥ 80% line coverage**, Checkstyle, SpotBugs):
+
+```bash
+mvn -pl loan-service -am verify
+```
+
+JaCoCo HTML report: `loan-service/target/site/jacoco/index.html`. Coverage excludes Spring Boot entrypoints, `config` packages, and generated/mapper/migration paths so boilerplate cannot fail the gate.
 
 ## Run with Docker
 
@@ -131,22 +165,9 @@ curl http://localhost:30080/actuator/health
 curl http://localhost:30080/api/loans
 ```
 
-### Start the full lab (k3d + Dashboard)
-
-```bash
-./scripts/start-lab.sh
-./scripts/deploy-and-test.sh
-```
-
 ## Kubernetes Dashboard
 
-Install and open the dashboard to inspect pods, services, and rollouts visually:
-
-```bash
-./scripts/setup-k8s-dashboard.sh
-```
-
-Or start port-forward in the background:
+`./scripts/up.sh` installs the dashboard. To reconnect the port-forward later:
 
 ```bash
 ./scripts/open-dashboard.sh
@@ -161,6 +182,7 @@ Or start port-forward in the background:
 | UI | URL |
 |----|-----|
 | Kubernetes Dashboard | https://localhost:8443 |
+| SonarQube | http://localhost:9000 |
 | Loan Service API | http://localhost:30080/api/loans |
 | Health check | http://localhost:30080/actuator/health |
 | Local dev (Spring Boot) | http://localhost:8081 |
@@ -170,17 +192,26 @@ Or start port-forward in the background:
 Jenkins runs in a **Docker container** with access to the Docker socket, Maven, and `kubectl`. The pipeline in `Jenkinsfile` implements this flow:
 
 ```
-GitHub → Jenkins (Docker) → Quality Gate (mvn verify)
+GitHub → Jenkins (Docker) → Quality Gate (mvn verify + JaCoCo)
+    → SonarQube (sonar.qualitygate.wait=true)
     → docker build → k3d Registry (k3d-qa-registry:5000) → k3d Cluster
     → kubectl set image → 3 replicas → REST Assured smoke → JUnit report
 ```
 
 ### One-time setup
 
+Preferred — bring everything up:
+
+```bash
+./scripts/up.sh
+```
+
+Or step by step:
+
 1. Create the k3d cluster and registry:
 
 ```bash
-./scripts/setup-k3d-cluster.sh
+K3D_CLUSTER=qa-cluster REGISTRY_NAME=qa-registry ./scripts/setup-k3d-cluster.sh
 ```
 
 2. Connect Jenkins to the k3d Docker network:
@@ -196,6 +227,52 @@ JENKINS_CONTAINER=jenkins ./scripts/setup-jenkins-k3d-network.sh
 ```bash
 ./scripts/export-jenkins-kubeconfig.sh jenkins-kubeconfig.yaml
 ```
+
+### SonarQube quality gate (local Docker)
+
+Community Edition SonarQube runs beside Jenkins. It **fails the pipeline** when the custom New Code gate is red (`sonar.qualitygate.wait=true`). It does **not** post GitHub PR line comments (that needs Developer Edition or SonarCloud). Use the Jenkins job status plus http://localhost:9000 for issue detail.
+
+One-time:
+
+```bash
+./scripts/setup-sonarqube.sh
+```
+
+That starts `docker-compose.sonarqube.yml`, waits until Sonar is `UP`, sets the admin password (`SONAR_ADMIN_PASSWORD`, default `QALabAdmin!9000`), creates project `com.qa:qa-architecture-lab`, attaches quality gate `qa-lab-new-code`, prints a token, and connects Jenkins to network `qa-lab-sonar` when the `jenkins` container exists.
+
+Jenkins credential:
+
+| Field | Value |
+|-------|--------|
+| Kind | Secret text |
+| ID | `SONAR_TOKEN` |
+| Secret | token printed by `setup-sonarqube.sh` |
+
+If Jenkins was started later:
+
+```bash
+JENKINS_CONTAINER=jenkins ./scripts/setup-jenkins-sonar-network.sh
+```
+
+Local scan after `verify`:
+
+```bash
+mvn -pl loan-service -am sonar:sonar -Dsonar.token=<token>
+```
+
+New Code conditions on `qa-lab-new-code`: coverage ≥ 80%, duplicated lines ≤ 3%, new vulnerabilities = 0, new blocker/critical issues = 0, security hotspots reviewed = 100%, reliability/security/maintainability ratings = A. The New Code Period is **previous version** (Jenkins sets `-Dsonar.projectVersion=$BUILD_NUMBER` on each analysis).
+
+Branch behavior in `Jenkinsfile`:
+
+| Branch | Maven verify + JaCoCo | Sonar wait | Deploy + smoke |
+|--------|------------------------|------------|----------------|
+| `main` | Yes | `true` | Yes |
+| feature | Yes | `true` | No |
+| `spike/**`, `experiment/**` | Yes | `false` | No |
+
+### Shift-left (SonarLint)
+
+Install SonarLint / SonarQube for IDE in IntelliJ or VS Code and bind **Connected Mode** to `http://localhost:9000` with project key `com.qa:qa-architecture-lab`. Most issues then show while typing, before CI.
 
 ### Registry naming
 
@@ -279,7 +356,7 @@ Configurable environment variables for scripts:
 | `DEPLOYMENT` | `loan-service` |
 | `BASE_URL` | `http://localhost:30080` |
 | `TIMEOUT` | `180` |
-| `K3D_CLUSTER` | `qa-lab` |
+| `K3D_CLUSTER` | `qa-cluster` |
 | `REGISTRY` | `localhost:5001` |
 
 ## Troubleshooting
@@ -344,7 +421,7 @@ kubectl -n qa-lab get events --sort-by='.lastTimestamp'
 | 5 — API Automation | Done | REST Assured test framework |
 | 6 — Deployment Validation | Done | Post-deploy validation scripts |
 | 7 — Resilience Testing | Planned | Pod failure, scaling, rollback |
-| 8 — CI/CD | Done | Jenkins Quality Gate → image → deploy → smoke |
+| 8 — CI/CD | Done | Jenkins Quality Gate (JaCoCo + Sonar wait) → image → deploy → smoke |
 | 9 — Helm | Planned | Helm chart templating |
 | 10 — Argo CD | Planned | GitOps deployment |
 | 11 — Observability | Planned | Prometheus, Grafana, OpenTelemetry |

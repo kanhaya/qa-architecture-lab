@@ -30,6 +30,15 @@
         <spotbugs-maven-plugin.version>4.9.8.5</spotbugs-maven-plugin.version>
         <maven-checkstyle-plugin.version>3.6.0</maven-checkstyle-plugin.version>
         <checkstyle.version>10.21.1</checkstyle.version>
+        <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
+        <sonar-maven-plugin.version>5.1.0.4751</sonar-maven-plugin.version>
+        <jacoco.line.coverage.minimum>0.80</jacoco.line.coverage.minimum>
+        <sonar.projectKey>com.qa:qa-architecture-lab</sonar.projectKey>
+        <sonar.projectName>qa-architecture-lab</sonar.projectName>
+        <sonar.host.url>http://localhost:9000</sonar.host.url>
+        <sonar.coverage.jacoco.xmlReportPaths>${maven.multiModuleProjectDirectory}/loan-service/target/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
+        <sonar.coverage.exclusions>**/*Application.java,**/config/**,**/generated/**,**/target/generated-sources/**,**/*Mapper.java,**/*MapperImpl.java,**/db/migration/**,**/db/changelog/**,**/openapi/model/**</sonar.coverage.exclusions>
+        <sonar.exclusions>**/generated/**,**/target/generated-sources/**,**/openapi/model/**</sonar.exclusions>
     </properties>
 
     <dependencyManagement>
@@ -42,5 +51,76 @@
             </dependency>
         </dependencies>
     </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <version>${jacoco-maven-plugin.version}</version>
+                    <configuration>
+                        <excludes>
+                            <exclude>**/*Application.class</exclude>
+                            <exclude>**/config/**</exclude>
+                            <exclude>**/generated/**</exclude>
+                            <exclude>**/*Mapper.class</exclude>
+                            <exclude>**/*MapperImpl.class</exclude>
+                            <exclude>**/db/migration/**</exclude>
+                            <exclude>**/db/changelog/**</exclude>
+                            <exclude>**/openapi/model/**</exclude>
+                        </excludes>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <id>prepare-agent</id>
+                            <goals>
+                                <goal>prepare-agent</goal>
+                            </goals>
+                        </execution>
+                        <execution>
+                            <id>report</id>
+                            <phase>verify</phase>
+                            <goals>
+                                <goal>report</goal>
+                            </goals>
+                        </execution>
+                        <execution>
+                            <id>check</id>
+                            <phase>verify</phase>
+                            <goals>
+                                <goal>check</goal>
+                            </goals>
+                            <configuration>
+                                <rules>
+                                    <rule>
+                                        <element>BUNDLE</element>
+                                        <limits>
+                                            <limit>
+                                                <counter>LINE</counter>
+                                                <value>COVEREDRATIO</value>
+                                                <minimum>${jacoco.line.coverage.minimum}</minimum>
+                                            </limit>
+                                        </limits>
+                                    </rule>
+                                </rules>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <groupId>org.sonarsource.scanner.maven</groupId>
+                    <artifactId>sonar-maven-plugin</artifactId>
+                    <version>${sonar-maven-plugin.version}</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+        <plugins>
+            <plugin>
+                <groupId>org.sonarsource.scanner.maven</groupId>
+                <artifactId>sonar-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>

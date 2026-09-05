@@ -1,0 +1,59 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: sonar-db
+    hostname: db
+    environment:
+      POSTGRES_USER: sonar
+      POSTGRES_PASSWORD: sonar
+      POSTGRES_DB: sonar
+    volumes:
+      - sonar-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sonar -d sonar"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - sonar
+
+  sonarqube:
+    image: sonarqube:lts-community
+    container_name: sonarqube
+    hostname: sonarqube
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://db:5432/sonar
+      SONAR_JDBC_USERNAME: sonar
+      SONAR_JDBC_PASSWORD: sonar
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    ports:
+      - "9000:9000"
+    volumes:
+      - sonar-data:/opt/sonarqube/data
+      - sonar-logs:/opt/sonarqube/logs
+      - sonar-extensions:/opt/sonarqube/extensions
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/api/system/status | grep -E '\"status\":\"UP\"|\"status\":\"STARTING\"|\"status\":\"DB_MIGRATION_RUNNING\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 60s
+    networks:
+      - sonar
+
+volumes:
+  sonar-db:
+  sonar-data:
+  sonar-logs:
+  sonar-extensions:
+
+networks:
+  sonar:
+    name: qa-lab-sonar

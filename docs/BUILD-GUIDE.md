@@ -1,6 +1,6 @@
 # QA Architecture Lab — Complete Build & CI/CD Playbook
 
-**Jenkins · Docker · k3d · Kubernetes · REST Assured**
+**Jenkins · Docker · k3d · Kubernetes · REST Assured · SonarQube**
 
 | | |
 |---|---|
@@ -51,7 +51,7 @@ Build a **production-style QA Architecture Lab** that demonstrates the full life
 | Docker | Package the app as a portable container image |
 | Kubernetes (k3d) | Run 3 replicas with health probes and a NodePort service |
 | API automation | REST Assured smoke/functional/negative/regression suites |
-| CI/CD (Jenkins) | Quality gate (tests + static analysis + OpenAPI contract) → image → deploy → smoke tests |
+| CI/CD (Jenkins) | Quality gate (tests + JaCoCo + Checkstyle + SpotBugs + OpenAPI + SonarQube wait) → image → deploy → smoke tests |
 
 **Target audience:** Senior SDETs and QA Architects learning how modern teams ship and validate microservices.
 
@@ -66,12 +66,14 @@ By the end of this lab you have:
 - ✅ A working **Loan Management REST API** with CRUD operations
 - ✅ **Unit and component tests** (`@WebMvcTest`) plus **OpenAPI contract tests** (in-process HTTP, no cluster)
 - ✅ **Static analysis** (Checkstyle, SpotBugs) bound to Maven `verify`
+- ✅ **JaCoCo** line coverage ≥ 80% on `loan-service` (boilerplate excluded) bound to `verify`
+- ✅ **SonarQube Community** (local Docker) with custom New Code quality gate and `sonar.qualitygate.wait=true`
 - ✅ A **multi-stage Dockerfile** with a built-in health check
 - ✅ **Kubernetes manifests** (namespace, configmap, deployment, service)
 - ✅ A **k3d cluster** with an embedded Docker registry and NodePort access
 - ✅ **REST Assured API tests** (smoke, functional, negative, regression)
 - ✅ **Shell scripts** for cluster setup, deploy, validate, and dashboard
-- ✅ A **Jenkins pipeline** with a **Quality Gate before `docker build`**, then push, deploy, and cluster smoke tests
+- ✅ A **Jenkins pipeline** with a **Quality Gate + SonarQube wait before `docker build`**, then push, deploy, and cluster smoke tests (`main` only)
 - ✅ A **successful end-to-end build** from GitHub → Jenkins → k3d → passing tests
 
 ---
@@ -234,7 +236,7 @@ Unit, MockMvc, and contract tests run **without Kubernetes** — `mvn -pl loan-s
 
 ```bash
 mvn test -pl loan-service
-# Full Quality Gate (tests + Checkstyle + SpotBugs + OpenAPI contract):
+# Full Quality Gate (tests + JaCoCo 80% + Checkstyle + SpotBugs + OpenAPI contract):
 mvn -pl loan-service -am verify
 ```
 
@@ -394,15 +396,18 @@ The `scripts/` directory contains automation for cluster setup, deployment, vali
 
 ```
 scripts/
-├── setup-k3d-cluster.sh          ← Foundation: create cluster + registry
-├── deploy-and-test.sh            ← Main workflow: build → deploy → test
+├── up.sh                           ← Start Docker, k3d, Jenkins, SonarQube, dashboard
+├── down.sh                         ← Stop the lab and reclaim this project's Docker disk
+├── setup-k3d-cluster.sh            ← Create cluster + registry (used by up.sh)
+├── setup-sonarqube.sh              ← Start SonarQube + quality gate (used by up.sh)
+├── deploy-and-test.sh              ← Local workflow: build → deploy → smoke
 ├── validate-deployment.sh          ← Health/replica checks (used by deploy-and-test)
-├── start-lab.sh                    ← Full lab: cluster + dashboard + status
-├── setup-k8s-dashboard.sh          ← Install K8s Dashboard (foreground)
-├── open-dashboard.sh               ← Open dashboard (background port-forward)
+├── open-dashboard.sh               ← Dashboard port-forward (background)
 ├── setup-jenkins-k3d-network.sh    ← Connect Jenkins to k3d Docker network
+├── setup-jenkins-sonar-network.sh  ← Connect Jenkins to SonarQube network
 ├── configure-jenkins-kubeconfig.sh ← Runtime kubeconfig (used by Jenkinsfile)
 ├── export-jenkins-kubeconfig.sh    ← Export kubeconfig for manual debugging
+├── prune-loan-images.sh            ← Keep last N loan-service tags (used by Jenkins)
 └── generate-playbook-pdf.sh        ← Regenerate this playbook as PDF
 ```
 
@@ -428,15 +433,13 @@ scripts/
 
 ```bash
 ./scripts/setup-k3d-cluster.sh
-# Custom cluster name:
-K3D_CLUSTER=qa-cluster ./scripts/setup-k3d-cluster.sh
 ```
 
 **Environment variables:**
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `K3D_CLUSTER` | `qa-lab` | k3d cluster name |
+| `K3D_CLUSTER` | `qa-cluster` | k3d cluster name (matches Jenkinsfile) |
 | `REGISTRY_NAME` | `qa-registry` | Registry name (becomes `k3d-qa-registry`) |
 | `REGISTRY_HOST_PORT` | `5001` | Host port for `docker push` |
 | `NODE_PORT` | `30080` | NodePort exposed on host |
@@ -488,7 +491,7 @@ IMAGE_TAG=2.0 ./scripts/deploy-and-test.sh
 | `DEPLOYMENT` | `loan-service` | Deployment name |
 | `BASE_URL` | `http://localhost:30080` | API test target URL |
 | `TIMEOUT` | `180` | Rollout and health timeout (seconds) |
-| `K3D_CLUSTER` | `qa-lab` | k3d cluster name |
+| `K3D_CLUSTER` | `qa-cluster` | k3d cluster name |
 | `REGISTRY` | `localhost:5001` | Host registry for push |
 | `IMAGE_NAME` | `loan-service` | Docker image name |
 | `IMAGE_TAG` | `1.0` | Docker image tag |
@@ -521,59 +524,44 @@ export BASE_URL=http://localhost:30080
 
 ---
 
-### 9.4 `start-lab.sh` — Start the complete lab environment
+### 9.4 `up.sh` — Start the complete lab
 
-**Purpose:** Brings up **everything** needed for hands-on learning: k3d cluster, Kubernetes Dashboard, port-forwards, and prints all access URLs and tokens.
-
-**Why needed:** Convenience script for workshop/demo scenarios. One command to get cluster + dashboard + status summary.
-
-**What it does:**
-
-1. Runs `setup-k3d-cluster.sh`
-2. Ensures NodePort `30080` is mapped
-3. Installs Kubernetes Dashboard (if not present)
-4. Creates `dashboard-admin` service account with cluster-admin role
-5. Starts dashboard port-forward on `https://localhost:8443` (background)
-6. Prints Loan Service URL, health URL, dashboard URL, and access token
-7. Waits for health and dashboard to become reachable
+**Purpose:** One command for Docker, k3d (`qa-cluster`), Kubernetes Dashboard, Jenkins, SonarQube, and the Docker networks Jenkins needs.
 
 **When to use:**
 
 ```bash
-./scripts/start-lab.sh
-# Then deploy the app:
-./scripts/deploy-and-test.sh
+./scripts/up.sh
+# Then in Jenkins: save SONAR_TOKEN and Build Now on main
 ```
+
+Skip pieces with `SKIP_JENKINS=1`, `SKIP_SONAR=1`, or `SKIP_DASHBOARD=1`.
 
 ---
 
-### 9.5 `setup-k8s-dashboard.sh` — Install Kubernetes Dashboard
+### 9.5 `down.sh` — Stop the lab and reclaim disk
 
-**Purpose:** Installs the official Kubernetes Dashboard and sets up admin access. Runs port-forward in the **foreground** (blocks terminal).
-
-**Why needed:** Visual inspection of pods, services, deployments, and events — essential for learning Kubernetes and debugging `ImagePullBackOff`, probe failures, etc.
+**Purpose:** Tears down this project's stack only. It does **not** run `docker system prune -a` (that would delete unrelated images).
 
 **What it does:**
 
-1. Applies dashboard manifests from `kubernetes/dashboard` GitHub (v2.7.0)
-2. Creates `dashboard-admin` ServiceAccount with `cluster-admin` ClusterRoleBinding
-3. Waits for dashboard deployment to be ready
-4. Generates a short-lived access token
-5. Starts `kubectl port-forward` on `https://localhost:8443` (foreground)
-
-**When to use:**
+1. Stops dashboard port-forward
+2. Deletes k3d clusters `qa-cluster` and `qa-lab` (registry included)
+3. `docker compose down -v` for SonarQube
+4. Removes the Jenkins container (keeps `jenkins_home` unless `--purge`)
+5. Removes `loan-service` / k3d registry tags, dangling images, unused lab volumes
+6. `--purge` also removes Sonar/Jenkins/k3s images and `jenkins_home`
 
 ```bash
-./scripts/setup-k8s-dashboard.sh
-# Open https://localhost:8443 and paste the printed token
-# Navigate to namespace: qa-lab
+./scripts/down.sh
+./scripts/down.sh --purge
 ```
 
 ---
 
 ### 9.6 `open-dashboard.sh` — Open dashboard (background)
 
-**Purpose:** Lightweight alternative to `setup-k8s-dashboard.sh` — starts port-forward in the **background** and prints the URL + token without blocking the terminal.
+**Purpose:** Starts port-forward in the **background** and prints the URL + token. Dashboard install is part of `up.sh`.
 
 **Why needed:** When the dashboard is already installed and you just need to reconnect or get a fresh token.
 
@@ -692,15 +680,13 @@ kubectl get nodes
 ### One-command workflows
 
 ```bash
-# First-time lab setup
-./scripts/setup-k3d-cluster.sh
-JENKINS_CONTAINER=jenkins ./scripts/setup-jenkins-k3d-network.sh
+# First-time / full lab
+./scripts/up.sh
+
+# Stop lab and reclaim this project's Docker disk
+./scripts/down.sh
 
 # Deploy and test locally (no Jenkins)
-./scripts/deploy-and-test.sh
-
-# Full lab with dashboard
-./scripts/start-lab.sh
 ./scripts/deploy-and-test.sh
 
 # Regenerate PDF playbook
@@ -737,13 +723,18 @@ JENKINS_CONTAINER=jenkins ./scripts/setup-jenkins-k3d-network.sh
 |---|-------|-------------|-----|
 | 1 | **Checkout** | Pulls code from GitHub | Always start from latest commit |
 | 2 | **Verify Environment** | Checks docker, kubectl, mvn, registry, k3d API | Fail fast if infrastructure is broken |
-| 3 | **Quality Gate** | `mvn -pl loan-service -am clean verify` | Unit tests, `@WebMvcTest`, OpenAPI contract (`RANDOM_PORT` — **not** k3d / `localhost:30080`), Checkstyle, and SpotBugs. Failure stops the pipeline; no image is built. |
-| 4 | **Build Docker Image** | `docker build` + `docker push` | Package app, push to k3d registry |
-| 5 | **Deploy to Kubernetes** | `kubectl apply` + `kubectl set image` | Roll out new image to 3 pods |
-| 6 | **Wait for Application** | `kubectl rollout status` | Ensure pods are healthy before testing |
-| 7 | **Run REST Assured Tests** | `mvn test -pl tests -Dgroups=smoke` | Validate deployed API automatically |
+| 3 | **Quality Gate** | `mvn -pl loan-service -am clean verify` | Unit tests, `@WebMvcTest`, OpenAPI contract (`RANDOM_PORT` — **not** k3d / `localhost:30080`), JaCoCo ≥ 80% line coverage, Checkstyle, and SpotBugs. Failure stops the pipeline; no image is built. |
+| 4 | **SonarQube** | `mvn sonar:sonar -Dsonar.qualitygate.wait=true` | Imports JaCoCo XML, waits for quality gate `qa-lab-new-code`. Spike/experiment branches set wait to `false`. |
+| 5 | **Build Docker Image** | `docker build` + `docker push` | Package app, push to k3d registry (`main` only) |
+| 6 | **Deploy to Kubernetes** | `kubectl apply` + `kubectl set image` | Roll out new image to 3 pods (`main` only) |
+| 7 | **Wait for Application** | `kubectl rollout status` | Ensure pods are healthy before testing |
+| 8 | **Run REST Assured Tests** | `mvn test -pl tests -Dgroups=smoke` | Validate deployed API automatically (`main` only) |
 
-The Quality Gate is the pre-image check: Checkstyle, SpotBugs, JUnit (`loan-service`), and OpenAPI contract tests against an in-process Spring Boot server (`RANDOM_PORT`). Cluster smoke tests (`tests` module) still run only after deploy.
+The Quality Gate is the pre-image check: JaCoCo, Checkstyle, SpotBugs, JUnit (`loan-service`), and OpenAPI contract tests against an in-process Spring Boot server (`RANDOM_PORT`). SonarQube then blocks on `qa-lab-new-code` (`sonar.qualitygate.wait=true`). Cluster smoke tests (`tests` module) still run only after deploy on `main`.
+
+Community Edition does not decorate GitHub PR lines or compute a PR diff as New Code. Conditions apply to the project's **New Code Period** (previous version). Jenkins job status plus http://localhost:9000 are the review signals. Install SonarLint Connected Mode against that URL and project key `com.qa:qa-architecture-lab` to catch most issues in the IDE.
+
+**Sonar one-time setup:** `./scripts/setup-sonarqube.sh` then store the printed token as Jenkins secret text credential `SONAR_TOKEN`. From Jenkins the server is `http://sonarqube:9000` on Docker network `qa-lab-sonar`.
 
 **Spec:** [`loan-service/src/main/resources/openapi/loan-service.yaml`](../loan-service/src/main/resources/openapi/loan-service.yaml). If a field or status code drifts from the spec, `verify` fails and Jenkins never builds an image.
 
@@ -767,6 +758,7 @@ HOST_REGISTRY = 'localhost:5001'          // docker push target
 BASE_URL      = 'http://k3d-qa-cluster-server-0:30080'  // API tests from Jenkins
 NAMESPACE     = 'qa-lab'
 K3D_CLUSTER   = 'qa-cluster'
+SONAR_HOST_URL = 'http://sonarqube:9000'  // from Jenkins on network qa-lab-sonar
 ```
 
 ### Kubeconfig inside Jenkins
@@ -792,6 +784,7 @@ Shell steps use `#!/usr/bin/env bash` because Jenkins defaults to `/bin/sh` (das
 | k3d registry (host push) | **5001** | `docker push` from Jenkins/host |
 | k3d registry (in-cluster) | **5000** | Kubernetes image pull |
 | Kubernetes Dashboard | **8443** | https://localhost:8443 |
+| SonarQube | **9000** | http://localhost:9000 (Jenkins uses http://sonarqube:9000) |
 | k3d API server (from Jenkins) | **6443** | `kubectl` inside Jenkins container |
 
 ### Quick health checks
@@ -808,6 +801,9 @@ curl http://localhost:5001/v2/_catalog
 
 # Jenkins (should NOT be used for API tests)
 curl http://localhost:8080/
+
+# SonarQube
+curl http://localhost:9000/api/system/status
 ```
 
 ---
@@ -1017,7 +1013,8 @@ Use this checklist every time you rebuild or debug the lab.
 | 6 | k3d API | `source scripts/configure-jenkins-kubeconfig.sh && kubectl get nodes` | Cluster reachable |
 | 7 | Registry DNS | `docker exec jenkins getent hosts k3d-qa-registry` | Returns IP |
 | 8 | Registry API | `curl http://k3d-qa-registry:5000/v2/_catalog` from Jenkins | JSON catalog |
-| 9 | Quality Gate | Jenkins **Quality Gate** stage | `mvn verify` green (unit, contract, Checkstyle, SpotBugs) |
+| 9 | Quality Gate | Jenkins **Quality Gate** stage | `mvn verify` green (unit, contract, JaCoCo ≥ 80%, Checkstyle, SpotBugs) |
+| 9b | SonarQube | Jenkins **SonarQube** stage + http://localhost:9000 | Quality gate `qa-lab-new-code` green (`wait=true` except spike/experiment) |
 | 10 | Image push | `curl localhost:5001/v2/loan-service/tags/list` | Contains build tag |
 | 11 | Namespace | `kubectl get ns qa-lab` | Exists |
 | 12 | Deployment | `kubectl rollout status deployment/loan-service -n qa-lab` | Successfully rolled out |
@@ -1034,13 +1031,13 @@ Use this checklist every time you rebuild or debug the lab.
 
 ### 15.1 Sixty-second interview answer
 
-> "I built a local CI/CD environment where Jenkins runs in Docker and orchestrates the full test-deployment lifecycle. After checkout, a Quality Gate runs `mvn verify` on loan-service: unit tests, MockMvc, OpenAPI contract tests on a random port, Checkstyle, and SpotBugs. Only if that passes does Jenkins build and push a Docker image tagged with the build number to a local k3d registry. Kubernetes deploys that image with three replicas. The pipeline waits for rollout, then runs REST Assured smoke tests against the live NodePort. I separated in-process quality (no cluster) from black-box API tests (need a deployed service)."
+> "I built a local CI/CD environment where Jenkins runs in Docker and orchestrates the full test-deployment lifecycle. After checkout, a Quality Gate runs `mvn verify` on loan-service: unit tests, MockMvc, OpenAPI contract tests on a random port, JaCoCo coverage, Checkstyle, and SpotBugs. SonarQube then analyzes the same module with `sonar.qualitygate.wait=true` so a failed New Code gate never reaches `docker build`. Only on `main` does Jenkins build and push a Docker image tagged with the build number to a local k3d registry. Kubernetes deploys that image with three replicas. The pipeline waits for rollout, then runs REST Assured smoke tests against the live NodePort. I separated in-process quality (no cluster) from black-box API tests (need a deployed service)."
 
 ### 15.2 Common interview questions
 
 **Q: Do you run tests before the image?**
 
-> Yes. The Quality Gate is `mvn -pl loan-service -am verify`. That covers unit tests, `@WebMvcTest`, OpenAPI contract tests on `RANDOM_PORT`, Checkstyle, and SpotBugs. A failure never reaches `docker build`. Cluster REST Assured in the `tests` module still runs only after deploy, because those tests need a live URL.
+> Yes. The Quality Gate is `mvn -pl loan-service -am verify`. That covers unit tests, `@WebMvcTest`, OpenAPI contract tests on `RANDOM_PORT`, JaCoCo ≥ 80% line coverage, Checkstyle, and SpotBugs. SonarQube then runs with `sonar.qualitygate.wait=true`. A failure never reaches `docker build`. Cluster REST Assured in the `tests` module still runs only after deploy on `main`, because those tests need a live URL.
 
 **Q: Why skip tests inside the Dockerfile?**
 
@@ -1090,6 +1087,14 @@ cd qa-architecture-lab
 mvn -pl loan-service -am verify
 ```
 
+### Step 2b — Start SonarQube and bind Jenkins
+
+```bash
+./scripts/setup-sonarqube.sh
+# Add Jenkins credential SONAR_TOKEN (secret text) from the script output
+# If Jenkins already exists: JENKINS_CONTAINER=jenkins ./scripts/setup-jenkins-sonar-network.sh
+```
+
 ### Step 3 — Run locally
 
 ```bash
@@ -1127,6 +1132,9 @@ docker run -d \
 
 # Connect to k3d network
 JENKINS_CONTAINER=jenkins ./scripts/setup-jenkins-k3d-network.sh
+
+# Connect to SonarQube network (after ./scripts/setup-sonarqube.sh)
+JENKINS_CONTAINER=jenkins ./scripts/setup-jenkins-sonar-network.sh
 ```
 
 Install Maven, Docker CLI, and kubectl inside Jenkins (or use a custom Jenkins image).
@@ -1138,7 +1146,8 @@ Install Maven, Docker CLI, and kubectl inside Jenkins (or use a custom Jenkins i
 3. Pipeline → Definition: **Pipeline script from SCM**
 4. SCM: Git → URL: `https://github.com/kanhaya/qa-architecture-lab.git`
 5. Branch: `main` → Script Path: `Jenkinsfile`
-6. Save → **Build Now**
+6. Add credential **SONAR_TOKEN** (secret text) from `./scripts/setup-sonarqube.sh`
+7. Save → **Build Now**
 
 ### Step 8 — Verify successful build
 
@@ -1192,8 +1201,8 @@ The local lab is intentionally simple. The same architecture evolves into a prod
 |-----------|---------------------|
 | k3d local registry | GHCR, ECR, GCR, or enterprise registry with TLS |
 | Build-number tags | Immutable image digests for provenance |
-| Single Jenkins pipeline | Separate PR CI, build, publish, and deploy jobs |
-| In-process Quality Gate (Checkstyle, SpotBugs, OpenAPI) | SonarQube quality gate, SAST, SCA, container scanning |
+| Single Jenkins pipeline | Separate PR CI, build, publish, and deploy jobs; GitHub PR decoration (SonarQube Developer Edition or SonarCloud) |
+| In-process Quality Gate (JaCoCo, Checkstyle, SpotBugs, OpenAPI) plus local SonarQube Community wait | Commercial PR-diff New Code, SAST/SCA beyond Sonar, container scanning |
 | Cluster smoke tests after deploy | Smoke → functional → regression → perf/security stages |
 | Static k8s YAML | Helm or Kustomize per environment |
 | Manual cluster | Ephemeral namespaces per PR/build |
@@ -1226,7 +1235,7 @@ Observability + automated diagnosis
 The most reusable lesson is the **dependency chain**:
 
 ```
-source → quality gate → container image → registry → Kubernetes workload → Service → cluster smoke
+source → quality gate (JaCoCo + Sonar wait) → container image → registry → Kubernetes workload → Service → cluster smoke
 ```
 
 When a pipeline fails, locate the broken link in that chain and inspect that layer directly.
@@ -1243,7 +1252,7 @@ When a pipeline fails, locate the broken link in that chain and inspect that lay
 | 4 — Kubernetes | k3d + manifests | 3 replicas, NodePort, probes |
 | 5 — API tests | REST Assured suites | Automated API validation on the cluster |
 | 6 — Scripts | deploy-and-test.sh etc. | One-command operations |
-| 7 — Jenkins | Quality Gate → image → deploy → smoke | Bad commits never produce an image |
+| 7 — Jenkins | Quality Gate + Sonar wait → image → deploy → smoke | Bad commits never produce an image |
 
 **Overall goal achieved:** A complete, hands-on QA Architecture Lab demonstrating how a real team builds, containers, deploys to Kubernetes, and validates a microservice — with Jenkins automating the entire flow.
 
